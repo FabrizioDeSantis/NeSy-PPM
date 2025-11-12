@@ -18,7 +18,7 @@ This repository contains the code for the paper "Neuro-Symbolic Learning for Pre
 
 ## Datasets
 
-The tested event logs can be found at https://data.4tu.nl/articles/dataset
+The tested event logs can be found at https://data.4tu.nl/search?datatypes=3
 
 ## Usage
 
