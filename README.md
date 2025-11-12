@@ -28,4 +28,5 @@ Execute the script of interest with following flags:
 * --seed: random seed used for parameters and splitting
 
 - Example for the *SEPSIS* event log:
+
 ```python main_sepsis.py --model_type="lstm" --setting="compliance" --seed=42```
