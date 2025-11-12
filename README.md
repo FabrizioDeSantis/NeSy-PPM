@@ -27,6 +27,6 @@ Execute the script of interest with following flags:
 * --setting: "compliance" or "temporal"
 * --seed: random seed used for parameters and splitting
 
-- Example for the *SEPSIS* event log:
+Example for the *SEPSIS* event log:
 
 ```python main_sepsis.py --model_type="lstm" --setting="compliance" --seed=42```
