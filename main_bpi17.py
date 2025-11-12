@@ -51,11 +51,14 @@ def get_args():
 
 args = get_args()
 
+sequence_length = 20
+
 config = ModelConfig(
     hidden_size=args.hidden_size,
     num_layers=args.num_layers,
     dropout_rate=args.dropout_rate,
     num_epochs = args.num_epochs,
+    sequence_length = sequence_length,
     dataset = "bpi17",
     seed = args.seed
 )

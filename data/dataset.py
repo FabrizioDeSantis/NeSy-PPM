@@ -7,14 +7,11 @@ from dataclasses import dataclass
 
 @dataclass
 class ModelConfig:
-    """Configuration class for LSTM model parameters"""
     hidden_size: int
     num_layers: int
+    sequence_length: int
+    dataset: str
     dropout_rate: float = 0.1
-    # sequence_length: int = 13 #sepsis
-    sequence_length: int = 20 # bpi17
-    # sequence_length: int = 40 # bpi12
-    # sequence_length: int = 10 # traffic_fines
     learning_rate: float = 0.001
     num_features: int = 4
     num_epochs: int = 100

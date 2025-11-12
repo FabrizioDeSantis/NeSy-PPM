@@ -48,6 +48,7 @@ def get_args():
 
     return parser.parse_args()
 
+sequence_length = 13
 
 args = get_args()
 
@@ -57,6 +58,7 @@ config = ModelConfig(
     dropout_rate=args.dropout_rate,
     num_epochs = args.num_epochs,
     dataset = "sepsis",
+    sequence_length = sequence_length,
     seed = args.seed
 )
 
