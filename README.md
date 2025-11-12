@@ -26,7 +26,12 @@ Execute the script of interest with following flags:
 * --model_type: "lstm" or "transformer"
 * --setting: "compliance" or "temporal"
 * --seed: random seed used for parameters and splitting
+* --num_epochs: number of training epochs of vanilla models
+* --num_epochs_nesy: number of training epochs of LTN models
+* --hidden_size: hidden_size of LSTM/Transformer backbones
+* --num_layers: LSTM/Transformer layers
+* --dropout_rate: dropout_rate for LSTM/Transformer backbones
 
-Example for the *SEPSIS* event log:
+Example for the *SEPSIS* event log with default parameters:
 
 ```python main_sepsis.py --model_type="lstm" --setting="compliance" --seed=42```
