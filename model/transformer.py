@@ -6,18 +6,17 @@ from transformers import AutoModel
 class EventTransformer(nn.Module):
     def __init__(self, vocab_sizes, config, feature_names, model_dim, num_classes, max_len, num_layers=2, num_heads=4, dropout=0.1):
         super().__init__()
-        torch.manual_seed(self.config.seed)
         self.config = config
         self.feature_names = feature_names
         self.numerical_features = [name for name in feature_names if name not in vocab_sizes.keys()]
         self.embeddings = nn.ModuleDict({
-            feature: nn.Embedding(vocab_size + 1, model_dim, padding_idx=0)
+            feature: nn.Embedding(vocab_size + 1, 32, padding_idx=0)
             for feature, vocab_size in vocab_sizes.items()
         })
-        transformer_input_size = (model_dim * len(self.embeddings)) + len(self.numerical_features)
+        transformer_input_size = (32 * len(self.embeddings)) + len(self.numerical_features)
         self.input_proj = nn.Linear(transformer_input_size, model_dim)
         self.positional_encoding = nn.Parameter(torch.randn(1, max_len, model_dim))
-
+        torch.manual_seed(self.config.seed)
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=model_dim, nhead=num_heads, batch_first=True
         )

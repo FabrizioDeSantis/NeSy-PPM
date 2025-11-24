@@ -7,15 +7,15 @@ import torch.nn.functional as F
 class LSTMModel(nn.Module):
     def __init__(self, vocab_sizes, config, num_classes, feature_names):
         super(LSTMModel, self).__init__()
-        torch.manual_seed(11)
         self.config = config
+        torch.manual_seed(self.config)
         self.feature_names = feature_names
         self.num_classes = num_classes
         self.embeddings = nn.ModuleDict({
-            feature: nn.Embedding(vocab_size + 1, config.hidden_size, padding_idx=0)
+            feature: nn.Embedding(vocab_size + 1, 32, padding_idx=0)
             for feature, vocab_size in vocab_sizes.items()
         })
-        lstm_input_size = (config.hidden_size * len(self.embeddings)) + (len(feature_names) - len(self.embeddings))
+        lstm_input_size = (32 * len(self.embeddings)) + (len(feature_names) - len(self.embeddings))
         self.lstm = nn.LSTM(
             input_size=lstm_input_size,
             hidden_size=config.hidden_size,
