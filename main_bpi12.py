@@ -69,8 +69,7 @@ device = "cuda:0" if torch.cuda.is_available() else "cpu"
 print("-- Reading dataset")
 data = pd.read_csv("data_processed/"+dataset+".csv", dtype={"org:resource": str})
 
-(X_train_, y_train_, X_test, y_test, feature_names), vocab_sizes, scalers = preprocess_bpi12.preprocess_eventlog(data, args.seed, args.setting)
-X_train, X_val, y_train, y_val = train_test_split(X_train_, y_train_, test_size=0.2, stratify=y_train_, random_state=args.seed)
+(X_train, y_train, X_val, y_val, X_test, y_test, feature_names), vocab_sizes, scalers = preprocess_bpi12.preprocess_eventlog(data, args.seed, args.setting)
 
 print("--- Label distribution")
 print("--- Training set")

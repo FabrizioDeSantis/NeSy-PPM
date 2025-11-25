@@ -66,8 +66,7 @@ device = "cuda:0" if torch.cuda.is_available() else "cpu"
 print("-- Reading dataset")
 data = pd.read_csv("data_processed/sepsis_2.csv", dtype={"org:resource": str})
 
-(X_train_, y_train_, X_test, y_test, feature_names), vocab_sizes, scalers = preprocess_sepsis.preprocess_eventlog(data, args.seed, args.setting)
-X_train, X_val, y_train, y_val = train_test_split(X_train_, y_train_, test_size=0.2, stratify=y_train_, random_state=args.seed)
+(X_train, y_train, X_val, y_val, X_test, y_test, feature_names), vocab_sizes, scalers = preprocess_sepsis.preprocess_eventlog(data, args.seed, args.setting)
 
 lactic_acid_high = ltn.Function(func=lambda x: (x[:, 351:364] > scalers["LacticAcid"].transform([[4]])[0][0]).any(dim=1))
 tachypnea_supsinf_crithr = ltn.Function(func=lambda x: (x[:, :13].eq(1).any(dim=1)) & (x[:, 39:52].eq(1).any(dim=1)) & (x[:, 65:78].eq(1).any(dim=1)))

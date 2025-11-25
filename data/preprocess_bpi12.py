@@ -3,13 +3,13 @@ from sklearn.model_selection import train_test_split
 import pandas as pd
 import random
 
-def create_test_set(data, seed):
+def create_test_set(data, seed, ratio=0.2):
     random.seed(seed)
     grouped = data.groupby("case:concept:name")
     unique_groups = list(grouped.groups.keys())  # Get the unique group IDs
     labels = data.groupby("case:concept:name")["label"].first().to_list()
 
-    len_test_set = int(len(unique_groups) * 0.3)
+    len_test_set = int(len(unique_groups) * ratio)
 
     labels_r1 = data.groupby("case:concept:name")["rule_1"].first().to_list()
     labels_r2 = data.groupby("case:concept:name")["rule_2"].first().to_list()
@@ -58,7 +58,7 @@ def create_train_val_test_split(data, train_ratio=0.8, val_ratio=0.1, test_ratio
     train_ids = graph_ids[:train_size]
     val_ids = graph_ids[train_size:train_size + val_size]
     test_ids = graph_ids[train_size + val_size:]
-    return train_ids, test_ids
+    return train_ids, val_ids, test_ids
 
 def create_ngrams(data, train_ids, test_ids, window_size=40):
 
@@ -113,28 +113,33 @@ def create_ngrams(data, train_ids, test_ids, window_size=40):
 
     return ngrams_training, labels_training, ngrams_test, labels_test, feature_names
 
-def preprocess_eventlog(data, seed, dataset_size=None, setting="compliance"):
+def preprocess_eventlog(data, seed, setting="compliance"):
 
     vocab_sizes = {}
     cases = data[data["concept:name"] == "A_SUBMITTED-COMPLETE"]
     labels = cases["label"].to_list()
     case_ids = cases["case:concept:name"].to_list()
-    print(len(case_ids))
     print("Number of traces: ", len(labels))
 
     if setting == "compliance":
         train_ids, test_ids = create_test_set(data, seed)
+        data_training = data[data["case:concept:name"].isin(train_ids)]
+        train_ids, val_ids = create_test_set(data_training, seed, ratio=0.2)
     else:
-        train_ids, test_ids = create_train_val_test_split(data)
+        train_ids, val_ids, test_ids = create_train_val_test_split(data, train_ratio=0.8, val_ratio=0.2, test_ratio=0.2)
 
     print("Number of traces in train set: ", len(train_ids))
+    print("Number of traces in val set: ", len(val_ids))
     print("Number of traces in test set: ", len(test_ids))
 
     scaler_ar = MinMaxScaler()
+    scaler_elapsed = MinMaxScaler()
+    scaler_time_prev = MinMaxScaler()
     
     labels = data.groupby("case:concept:name")["label"].first().reset_index()
     print(data.columns)
     data = data.drop(columns=["case:REG_DATE"])
+
     data["concept:name_str"] = data["concept:name"]
     print("concept:name_str: ", data["concept:name_str"].unique())
     data["concept:name"] = pd.Categorical(data["concept:name"])
@@ -143,6 +148,7 @@ def preprocess_eventlog(data, seed, dataset_size=None, setting="compliance"):
     print("W_Nabellen offertes-START: ", data["concept:name"].cat.categories.get_loc("W_Nabellen offertes-START") + 1)
     print("O_SENT_BACK-COMPLETE: ", data["concept:name"].cat.categories.get_loc("O_SENT_BACK-COMPLETE") + 1)
     print("O_CANCELLED-COMPLETE: ", data["concept:name"].cat.categories.get_loc("O_CANCELLED-COMPLETE") + 1)
+    print("A_ACCEPTED-COMPLETE: ", data["concept:name"].cat.categories.get_loc("A_ACCEPTED-COMPLETE") + 1)
     data["concept:name"] = data["concept:name"].cat.codes + 1
     vocab_sizes["concept:name"] = data["concept:name"].max()
 
@@ -154,11 +160,18 @@ def preprocess_eventlog(data, seed, dataset_size=None, setting="compliance"):
     data["org:resource"] = data["org:resource"].cat.codes + 1
     vocab_sizes["org:resource"] = data["org:resource"].max()
 
+    # Numerical values
     data["case:AMOUNT_REQ"] = data["case:AMOUNT_REQ"].ffill()
     data["case:AMOUNT_REQ"] = scaler_ar.fit_transform(data[["case:AMOUNT_REQ"]])
+    data["elapsed_time"] = data["elapsed_time"].fillna(0)
+    data["elapsed_time"] = scaler_elapsed.fit_transform(data[["elapsed_time"]])
+    data["time_since_previous"] = data["time_since_previous"].fillna(0)
+    data["time_since_previous"] = scaler_time_prev.fit_transform(data[["time_since_previous"]])
 
     scalers = {
-        "case:AMOUNT_REQ": scaler_ar
+        "case:AMOUNT_REQ": scaler_ar,
+        "elapsed_time": scaler_elapsed,
+        "time_since_previous": scaler_time_prev
     }
 
-    return create_ngrams(data, train_ids, test_ids), vocab_sizes, scalers
+    return create_ngrams(data, train_ids, val_ids, test_ids), vocab_sizes, scalers

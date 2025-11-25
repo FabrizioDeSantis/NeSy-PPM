@@ -3,13 +3,13 @@ from sklearn.model_selection import train_test_split
 import pandas as pd
 import random
 
-def create_test_set(data, seed):
+def create_test_set(data, seed, ratio=0.2):
     random.seed(seed)
     grouped = data.groupby("case:concept:name")
     unique_groups = list(grouped.groups.keys())
     labels = data.groupby("case:concept:name")["label"].first().to_list()
 
-    len_test_set = int(len(unique_groups) * 0.3)
+    len_test_set = int(len(unique_groups) * ratio)
     len_training_set = len(unique_groups) - len_test_set
 
     labels_r1 = data.groupby("case:concept:name")["rule_1"].first().to_list()
@@ -60,7 +60,7 @@ def create_train_val_test_split(data, train_ratio=0.8, val_ratio=0.1, test_ratio
     train_ids = graph_ids[:train_size]
     val_ids = graph_ids[train_size:train_size + val_size]
     test_ids = graph_ids[train_size + val_size:]
-    return train_ids, test_ids
+    return train_ids, val_ids, test_ids
 
 def create_ngrams(data, train_ids, test_ids, window_size=20):
 
@@ -113,7 +113,7 @@ def create_ngrams(data, train_ids, test_ids, window_size=20):
 
     return ngrams_training, labels_training, ngrams_test, labels_test, feature_names
 
-def preprocess_eventlog(data, seed, dataset_size=None, setting="compliance"):
+def preprocess_eventlog(data, seed, setting="compliance"):
     vocab_sizes = {}
     cases = data[data["concept:name"] == "A_Create Application"]
     labels = cases["label"].to_list()
@@ -123,8 +123,11 @@ def preprocess_eventlog(data, seed, dataset_size=None, setting="compliance"):
 
     if setting == "compliance":
         train_ids, test_ids = create_test_set(data, seed)
+        data_training = data[data["case:concept:name"].isin(train_ids)]
+        train_ids, val_ids = create_test_set(data_training, seed, ratio=0.2)
     else:
-        train_ids, test_ids = create_train_val_test_split(data)
+        train_ids, val_ids, test_ids = create_train_val_test_split(data, train_ratio=0.8, val_ratio=0.2, test_ratio=0.2)
+
     print("Number of traces in train set: ", len(train_ids))
     print("Number of traces in test set: ", len(test_ids))
 
@@ -199,6 +202,16 @@ def preprocess_eventlog(data, seed, dataset_size=None, setting="compliance"):
     data["OfferedAmount"] = scaler_oa.fit_transform(data[["OfferedAmount"]])
     scalers["OfferedAmount"] = scaler_oa
 
-    data = data[['case:concept:name', 'label', 'concept:name', 'case:LoanGoal', 'CreditScore', 'Action', 'org:resource', 'lifecycle:transition', 'case:ApplicationType', 'case:RequestedAmount', 'FirstWithdrawalAmount', 'NumberOfTerms', 'MonthlyCost', 'OfferedAmount', 'time:timestamp', 'rule_1', 'rule_2', 'rule_3']]
+    scaler_elapsed = MinMaxScaler()
+    data["elapsed_time"] = data["elapsed_time"].fillna(0)
+    data["elapsed_time"] = scaler_elapsed.fit_transform(data[["elapsed_time"]])
+    scalers["elapsed_time"] = scaler_elapsed
 
-    return create_ngrams(data, train_ids, test_ids), vocab_sizes, scalers
+    scaler_time_prev = MinMaxScaler()
+    data["time_since_previous"] = data["time_since_previous"].fillna(0)
+    data["time_since_previous"] = scaler_time_prev.fit_transform(data[["time_since_previous"]])
+    scalers["time_since_previous"] = scaler_time_prev
+
+    data = data[['case:concept:name', 'label', 'concept:name', 'case:LoanGoal', 'CreditScore', 'Action', 'org:resource', 'lifecycle:transition', 'case:ApplicationType', 'case:RequestedAmount', 'FirstWithdrawalAmount', 'NumberOfTerms', 'MonthlyCost', 'OfferedAmount', 'time:timestamp', 'elapsed_time', 'time_since_previous', 'rule_1', 'rule_2', 'rule_3']]
+
+    return create_ngrams(data, train_ids, val_ids, test_ids), vocab_sizes, scalers
