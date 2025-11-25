@@ -158,10 +158,10 @@ if args.train_vanilla:
                 break
         if f1 > max_f1_val:
             max_f1_val = f1
-            torch.save(model.state_dict(), "ltn_w_k.pth")
+            torch.save(model.state_dict(), "best_model.pth")
         model.train()
 
-    model.load_state_dict(torch.load("ltn_w_k.pth"))
+    model.load_state_dict(torch.load("best_model.pth"))
 
     model.eval()
     y_pred = []
@@ -239,7 +239,16 @@ for epoch in range(args.num_epochs_nesy):
     train_loss = train_loss / len(train_loader)
     print(" epoch %d | loss %.4f"
                 %(epoch, train_loss))
+    with torch.no_grad():
+        model.eval()
+        _, f1score, _, _, _ =compute_metrics(val_loader, model, device, "nesy", scalers, dataset)
+        if f1score > max_f1_val:
+            max_f1_val = f1score
+            torch.save(model.state_dict(), "best_model.pth")
+            count_early_stop = 0
+    model.train()
 
+model.load_state_dict(torch.load("best_model.pth"))
 model.eval()
 print("Metrics LTN no rules")
 accuracy, f1score, precision, recall, compliance = compute_metrics(test_loader, model, device, "ltn_w_k", scalers, dataset)
@@ -306,11 +315,19 @@ for epoch in range(args.num_epochs_nesy):
         optimizer.step()
         train_loss += loss.item()
         del x_P, x_not_P, sat_agg
-    model.eval()
     train_loss = train_loss / len(train_loader)
     print(" epoch %d | loss %.4f"
                 %(epoch, train_loss))
+    with torch.no_grad():
+        model.eval()
+        _, f1score, _, _, _ =compute_metrics(val_loader, model, device, "nesy", scalers, dataset)
+        if f1score > max_f1_val:
+            max_f1_val = f1score
+            torch.save(model.state_dict(), "best_model.pth")
+            count_early_stop = 0
+    model.train()
 
+model.load_state_dict(torch.load("best_model.pth"))
 model.eval()
 print("Metrics LTN w all rules")
 accuracy, f1score, precision, recall, compliance = compute_metrics(test_loader, model, device, "ltn_w_k", scalers, dataset)
@@ -435,11 +452,6 @@ for epoch in range(args.num_epochs_nesy):
     train_loss = train_loss / len(train_loader)
     print(" epoch %d | loss %.4f"
                 %(epoch, train_loss))
-    _, f1score, _, _, _ =compute_metrics(val_loader, model, device, "nesy", scalers, dataset)
-    if f1score > max_f1_val:
-        max_f1_val = f1score
-        torch.save(model.state_dict(), "ltn_w_k.pth")
-        count_early_stop = 0
     if epoch == 5:
         sat_r1 = torch.stack(sat_r1).to(device)
         sat_r2 = torch.stack(sat_r2).to(device)
@@ -464,8 +476,16 @@ for epoch in range(args.num_epochs_nesy):
         print("Rule 3:", gat_r3)
         print("Rule 4:", gat_r4)
         print("Rule 5:", gat_r5)
+    with torch.no_grad():
+        model.eval()
+        _, f1score, _, _, _ =compute_metrics(val_loader, model, device, "nesy", scalers, dataset)
+        if f1score > max_f1_val:
+            max_f1_val = f1score
+            torch.save(model.state_dict(), "best_model.pth")
+            count_early_stop = 0
+    model.train()
 
-model.load_state_dict(torch.load("ltn_w_k.pth"))
+model.load_state_dict(torch.load("best_model.pth"))
 model.eval()
 print("Metrics LTN w pruning")
 accuracy, f1score, precision, recall, compliance = compute_metrics(test_loader, model, device, "nesy", scalers, dataset)

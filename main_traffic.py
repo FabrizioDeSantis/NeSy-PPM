@@ -187,9 +187,18 @@ for epoch in range(args.num_epochs_nesy):
         train_loss += loss.item()
         del x_P, x_not_P, sat_agg
     train_loss = train_loss / len(train_loader)
+    with torch.no_grad():
+        model.eval()
+        _, f1score, _, _, _ =compute_metrics(val_loader, model, device, "nesy", scalers, dataset)
+        if f1score > max_f1_val:
+            max_f1_val = f1score
+            torch.save(model.state_dict(), "best_model.pth")
+            count_early_stop = 0
+    model.train()
     print(" epoch %d | loss %.4f"
                 %(epoch, train_loss))
 
+model.load_state_dict(torch.load("best_model.pth"))
 model.eval()
 print("Metrics LTN w/o rules")
 accuracy, f1score, precision, recall, compliance = compute_metrics(test_loader, model, device, "ltn", scalers, dataset)
@@ -228,7 +237,7 @@ payment_less_fine = ltn.Function(func = lambda x: ((x[:, :10] == 7).any(dim=1) &
 check_add_penality = ltn.Function(func = lambda x: (x[:, :10] == 1).any(dim=1))
 amount_greater_than_400 = ltn.Function(func = lambda x: (x[:, 90:100] > scalers["amount"].transform([[400]])[0][0]).any(dim=1))
 vehicle_class_A = ltn.Function(func = lambda x: (x[:, 30:40] == 2).any(dim=1))
-
+max_f1_val = 0.0
 for epoch in range(args.num_epochs_nesy):
     train_loss = 0.0
     for enum, (x, y) in enumerate(train_loader):
@@ -258,9 +267,18 @@ for epoch in range(args.num_epochs_nesy):
         train_loss += loss.item()
         del x_P, x_not_P, sat_agg
     train_loss = train_loss / len(train_loader)
+    with torch.no_grad():
+        model.eval()
+        _, f1score, _, _, _ =compute_metrics(val_loader, model, device, "nesy", scalers, dataset)
+        if f1score > max_f1_val:
+            max_f1_val = f1score
+            torch.save(model.state_dict(), "best_model.pth")
+            count_early_stop = 0
+    model.train()
     print(" epoch %d | loss %.4f"
                 %(epoch, train_loss))
 
+model.load_state_dict(torch.load("best_model.pth"))
 model.eval()
 print("Metrics LTN w/o pruning")
 accuracy, f1score, precision, recall, compliance = compute_metrics(test_loader, model, device, "ltn_w_k", scalers, dataset)
@@ -328,7 +346,7 @@ for epoch in range(args.num_epochs_nesy):
             formulas.extend([
                 Forall(x_not_P, Not(P(x_not_P)))
             ])
-        if epoch <= 1:
+        if epoch <= 5:
             formulas_knowledge.extend([
                 Forall(x_All, Implies(check_add_penality(x_All), P(x_All))),
                 Forall(x_All, Implies(payment_less_fine(x_All), P(x_All))),
@@ -373,12 +391,6 @@ for epoch in range(args.num_epochs_nesy):
         train_loss += loss.item()
         del x_P, x_not_P, sat_agg
     train_loss = train_loss / len(train_loader)
-    _, f1score, _, _, _ =compute_metrics(val_loader, model, device, "nesy", scalers, dataset)
-    if f1score > max_f1_val:
-        max_f1_val = f1score
-        torch.save(model.state_dict(), "best_model.pth")
-        count_early_stop = 0
-    print(f1score)
     print(" epoch %d | loss %.4f"
                 %(epoch, train_loss))
     if epoch == 5:
@@ -402,6 +414,14 @@ for epoch in range(args.num_epochs_nesy):
         print("Rule 2 gating score:", gat_r2)
         print("Rule 3 gating score:", gat_r3)
         print("Rule 4 gating score:", gat_r4)
+    with torch.no_grad():
+        model.eval()
+        _, f1score, _, _, _ =compute_metrics(val_loader, model, device, "nesy", scalers, dataset)
+        if f1score > max_f1_val:
+            max_f1_val = f1score
+            torch.save(model.state_dict(), "best_model.pth")
+            count_early_stop = 0
+    model.train()
 
 model.load_state_dict(torch.load("best_model.pth"))
 model.eval()

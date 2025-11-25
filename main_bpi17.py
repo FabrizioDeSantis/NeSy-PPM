@@ -179,6 +179,7 @@ loan_takeover_req_amount_greater_20k = ltn.Function(func = lambda x: (x[:, 140] 
 ex_loan_takeover = ltn.Function(func = lambda x: (x[:, 20:40] == 3).any(dim=1))
 application_type_new_credit = ltn.Function(func = lambda x: (x[:, 120:140] == 2).any(dim=1))
 
+max_f1_val = 0.0
 for epoch in range(args.num_epochs_nesy):
     train_loss = 0.0
     for enum, (x, y) in enumerate(train_loader):
@@ -202,9 +203,18 @@ for epoch in range(args.num_epochs_nesy):
         train_loss += loss.item()
         del x_P, x_not_P, sat_agg
     train_loss = train_loss / len(train_loader)
+    with torch.no_grad():
+        model.eval()
+        _, f1score, _, _, _ =compute_metrics(val_loader, model, device, "nesy", scalers, dataset)
+        if f1score > max_f1_val:
+            max_f1_val = f1score
+            torch.save(model.state_dict(), "best_model.pth")
+            count_early_stop = 0
+    model.train()
     print(" epoch %d | loss %.4f"
                 %(epoch, train_loss))
 
+model.load_state_dict(torch.load("best_model.pth"))
 model.eval()
 print("Metrics LTN w/o rules")
 accuracy, f1score, precision, recall, compliance = compute_metrics(test_loader, model, device, "ltn", scalers, dataset)
@@ -244,6 +254,7 @@ loan_takeover_req_amount_greater_20k = ltn.Function(func = lambda x: (x[:, 140] 
 ex_loan_takeover = ltn.Function(func = lambda x: (x[:, 20:40] == 3).any(dim=1))
 application_type_new_credit = ltn.Function(func = lambda x: (x[:, 120:140] == 2).any(dim=1))
 
+max_f1_val = 0.0
 for epoch in range(args.num_epochs_nesy):
     train_loss = 0.0
     for enum, (x, y) in enumerate(train_loader):
@@ -274,12 +285,21 @@ for epoch in range(args.num_epochs_nesy):
         train_loss += loss.item()
         del x_P, x_not_P, sat_agg
     train_loss = train_loss / len(train_loader)
+    with torch.no_grad():
+        model.eval()
+        _, f1score, _, _, _ =compute_metrics(val_loader, model, device, "nesy", scalers, dataset)
+        if f1score > max_f1_val:
+            max_f1_val = f1score
+            torch.save(model.state_dict(), "best_model.pth")
+            count_early_stop = 0
+    model.train()
     print(" epoch %d | loss %.4f"
                 %(epoch, train_loss))
 
+model.load_state_dict(torch.load("best_model.pth"))
 model.eval()
 print("Metrics LTN w/o pruning")
-accuracy, f1score, precision, recall, compliance = compute_metrics(test_loader, lstm, device, "ltn", scalers, dataset)
+accuracy, f1score, precision, recall, compliance = compute_metrics(test_loader, model, device, "ltn", scalers, dataset)
 print("Accuracy:", accuracy)
 metrics_ltn.append(accuracy)
 print("F1 Score:", f1score)
@@ -357,7 +377,7 @@ for epoch in range(args.num_epochs_nesy):
                 formulas.append(Forall(x_All, Implies(ex_loan_takeover(x_All), P(x_All))))
             if gat_r5 > threshold:
                 formulas.append(Forall(x_All, Implies(application_type_new_credit(x_All), P(x_All))))
-        if epoch == 1:
+        if epoch == 5:
             with torch.no_grad():
                 sat_r1 += credit_score_req_amount_less_20k(x_All).value
                 sat_r2 += no_credit_score_greater_0(x_All).value
@@ -379,11 +399,6 @@ for epoch in range(args.num_epochs_nesy):
     train_loss = train_loss / len(train_loader)
     print(" epoch %d | loss %.4f"
                 %(epoch, train_loss))
-    _, f1score, _, _, _ =compute_metrics(val_loader, model, device, "nesy", scalers, dataset)
-    if f1score > max_f1_val:
-        max_f1_val = f1score
-        torch.save(model.state_dict(), "ltn_w_k.pth")
-        count_early_stop = 0
     if epoch == 5:
         sat_r1 = torch.stack(sat_r1)
         sat_r2 = torch.stack(sat_r2)
@@ -435,8 +450,16 @@ for epoch in range(args.num_epochs_nesy):
         print("gat_r3:", gat_r3)
         print("gat_r4:", gat_r4)
         print("gat_r5:", gat_r5)
+    with torch.no_grad():
+        model.eval()
+        _, f1score, _, _, _ =compute_metrics(val_loader, model, device, "nesy", scalers, dataset)
+        if f1score > max_f1_val:
+            max_f1_val = f1score
+            torch.save(model.state_dict(), "best_model.pth")
+            count_early_stop = 0
+    model.train()
 
-model.load_state_dict(torch.load("ltn_w_k.pth"))
+model.load_state_dict(torch.load("best_model.pth"))
 model.eval()
 print("Metrics LTN w pruning")
 accuracy, f1score, precision, recall, compliance = compute_metrics(test_loader, model, device, "ltn", scalers, dataset)

@@ -116,7 +116,7 @@ def create_ngrams(data, train_ids, test_ids, window_size=13):
 
     return ngrams_training, labels_training, ngrams_test, labels_test, feature_names
 
-def create_train_val_test_split(data, train_ratio=0.8, val_ratio=0.1, test_ratio=0.2):
+def create_train_val_test_split(data, train_ratio=0.8, val_ratio=0.2, test_ratio=0.2):
     data = data.sort_values(by=['case:concept:name', 'time:timestamp'])
     graph_ids = data['case:concept:name'].unique()
     num_graphs = len(graph_ids)

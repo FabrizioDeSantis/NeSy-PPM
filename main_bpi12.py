@@ -178,7 +178,7 @@ Implies = ltn.Connective(ltn.fuzzy_ops.ImpliesReichenbach())
 SatAgg = ltn.fuzzy_ops.SatAgg()
 params = list(P.parameters())
 optimizer = torch.optim.Adam(params, lr=config.learning_rate)
-
+max_f1_val = 0.0
 for epoch in range(args.num_epochs_nesy):
     train_loss = 0.0
     for enum, (x, y) in enumerate(train_loader):
@@ -202,10 +202,18 @@ for epoch in range(args.num_epochs_nesy):
         train_loss += loss.item()
         del x_P, x_not_P, sat_agg
     train_loss = train_loss / len(train_loader)
+    with torch.no_grad():
+        model.eval()
+        _, f1score, _, _, _ =compute_metrics(val_loader, model, device, "nesy", scalers, dataset)
+        if f1score > max_f1_val:
+            max_f1_val = f1score
+            torch.save(model.state_dict(), "best_model.pth")
+            count_early_stop = 0
+    model.train()
     print(" epoch %d | loss %.4f "
                 %(epoch, train_loss))
 
-model.eval()
+model.load_state_dict(torch.load("best_model.pth"))
 print("Metrics LTN w/o knowledge")
 accuracy, f1score, precision, recall, compliance = compute_metrics(test_loader, model, device, "ltn", scalers, dataset)
 print("Accuracy:", accuracy)
@@ -233,7 +241,7 @@ Not = ltn.Connective(ltn.fuzzy_ops.NotStandard())
 And = ltn.Connective(ltn.fuzzy_ops.AndProd())
 Or = ltn.Connective(ltn.fuzzy_ops.OrProbSum())
 Implies = ltn.Connective(ltn.fuzzy_ops.ImpliesReichenbach())
-
+max_f1_val = 0.0
 SatAgg = ltn.fuzzy_ops.SatAgg()
 params = list(P.parameters())
 optimizer = torch.optim.Adam(params, lr=config.learning_rate)
@@ -294,9 +302,18 @@ for epoch in range(args.num_epochs_nesy):
         train_loss += loss.item()
         del x_P, x_not_P, sat_agg
     train_loss = train_loss / len(train_loader)
+    with torch.no_grad():
+        model.eval()
+        _, f1score, _, _, _ =compute_metrics(val_loader, model, device, "nesy", scalers, dataset)
+        if f1score > max_f1_val:
+            max_f1_val = f1score
+            torch.save(model.state_dict(), "best_model.pth")
+            count_early_stop = 0
+    model.train()
     print(" epoch %d | loss %.4f"
                 %(epoch, train_loss))
 
+model.load_state_dict(torch.load("best_model.pth"))
 model.eval()
 print("Metrics LTN w/o rule pruning")
 accuracy, f1score, precision, recall, compliance = compute_metrics(test_loader, model, device, "ltn_w_k", scalers, dataset)
@@ -333,7 +350,7 @@ optimizer = torch.optim.Adam(params, lr=config.learning_rate)
 gat_r1, gat_r2, gat_r3, gat_r4, gat_r5, gat_r6 = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
 sat_r1, sat_r2, sat_r3, sat_r4, sat_r5, sat_r6, sat_main, sat_main_neg = [], [], [], [], [], [], [], []
 threshold = 0.3
-max_f1_val = 0
+max_f1_val = 0.0
 for epoch in range(args.num_epochs_nesy):
     train_loss = 0.0
     for enum, (x, y) in enumerate(train_loader):
@@ -409,12 +426,14 @@ for epoch in range(args.num_epochs_nesy):
     train_loss = train_loss / len(train_loader)
     print(" epoch %d | loss %.4f"
                 %(epoch, train_loss))
-    _, f1score, _, _, _ =compute_metrics(val_loader, model, device, "nesy", scalers, dataset)
-    if f1score > max_f1_val:
-        max_f1_val = f1score
-        torch.save(model.state_dict(), "ltn_w_k.pth")
-        count_early_stop = 0
-    if epoch == 1:
+    with torch.no_grad():
+        model.eval()
+        _, f1score, _, _, _ =compute_metrics(val_loader, model, device, "nesy", scalers, dataset)
+        if f1score > max_f1_val:
+            max_f1_val = f1score
+            torch.save(model.state_dict(), "ltn_w_k.pth")
+            count_early_stop = 0
+    if epoch == 5:
         sat_r1 = torch.stack(sat_r1)
         sat_r2 = torch.stack(sat_r2)
         sat_r3 = torch.stack(sat_r3)
@@ -474,6 +493,7 @@ for epoch in range(args.num_epochs_nesy):
         print("gat_r4:", gat_r4)
         print("gat_r5:", gat_r5)
         print("gat_r6:", gat_r6)
+    model.train()
 
 model.load_state_dict(torch.load("ltn_w_k.pth"))
 model.eval()
