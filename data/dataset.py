@@ -15,6 +15,7 @@ class ModelConfig:
     learning_rate: float = 0.001
     num_features: int = 4
     num_epochs: int = 100
+    seed: int = 42
     
 class NeSyDataset(Dataset):
     def __init__(self, sequences, labels):
