@@ -8,7 +8,7 @@ class LSTMModel(nn.Module):
     def __init__(self, vocab_sizes, config, num_classes, feature_names):
         super(LSTMModel, self).__init__()
         self.config = config
-        torch.manual_seed(self.config)
+        torch.manual_seed(self.config.seed)
         self.feature_names = feature_names
         self.num_classes = num_classes
         self.embeddings = nn.ModuleDict({
