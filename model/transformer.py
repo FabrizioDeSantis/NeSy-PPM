@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from transformers import AutoModel
 
 class EventTransformer(nn.Module):
     def __init__(self, vocab_sizes, config, feature_names, model_dim, num_classes, max_len, num_layers=2, num_heads=4, dropout=0.1):

@@ -4,7 +4,7 @@ import torch
 import numpy as np
 from sklearn.model_selection import train_test_split, StratifiedKFold
 from torch.utils.data import DataLoader
-from model.lstm import LSTMModel, LSTMModelA, LSTMModelNext, LogitsToPredicate, BackboneLSTM, MLP
+from model.lstm import LSTMModel
 from model.transformer import EventTransformer
 from sklearn.metrics import f1_score, accuracy_score, precision_score, recall_score, confusion_matrix
 import statistics
