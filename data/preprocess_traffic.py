@@ -52,25 +52,34 @@ def create_test_set(data, seed, ratio=0.2):
 
     return training_ids, test_ids
 
-def create_ngrams(data, train_ids, test_ids, window_size=10):
+def create_ngrams(data, train_ids, val_ids,test_ids, window_size=10):
 
     ngrams_test = []
     ngrams_training = []
+    ngrams_val = []
     labels_training = []
     labels_test = []
+    labels_val = []
 
     training_data = data[data["case:concept:name"].isin(train_ids)]
+    val_data = data[data["case:concept:name"].isin(val_ids)]
     test_data = data[data["case:concept:name"].isin(test_ids)]
+    max_len = 13
 
     for id_value, group in training_data.groupby('case:concept:name'):
 
         group = group.reset_index(drop=True)
+                
         label = int(group['label'].dropna().iloc[0])
+        if label == 0:
+            idx = group[group['concept:name_str'].str.contains(r'\bRelease\b', na=False)].index
+            if not idx.empty:
+                group = group.iloc[:idx[0]]
 
         if len(group) > window_size:
             group = group.iloc[:window_size]
 
-        group = group.drop(columns=["label", "case:concept:name", "time:timestamp"])
+        group = group.drop(columns=["label", "case:concept:name", "time:timestamp", "lifecycle:transition", "concept:name_str", "rule_1", "rule_2", "rule_3", "rule_4", "rule_5"])
 
         feature_names = group.columns.tolist()
         for n in range(1, len(group), 1):
@@ -81,15 +90,44 @@ def create_ngrams(data, train_ids, test_ids, window_size=10):
             cols = [inner_list + [0] * (window_size-len(inner_list)) for inner_list in cols]
             ngrams_training.append(cols)
 
+    for id_value, group in val_data.groupby('case:concept:name'):
+
+        group = group.reset_index(drop=True)
+                
+        label = int(group['label'].dropna().iloc[0])
+        if label == 0:
+            idx = group[group['concept:name_str'].str.contains(r'\bRelease\b', na=False)].index
+            if not idx.empty:
+                group = group.iloc[:idx[0]]
+
+        if len(group) > window_size:
+            group = group.iloc[:window_size]
+
+        group = group.drop(columns=["label", "case:concept:name", "time:timestamp", "lifecycle:transition", "concept:name_str", "rule_1", "rule_2", "rule_3", "rule_4", "rule_5"])
+
+        feature_names = group.columns.tolist()
+        for n in range(1, len(group), 1):
+            labels_val.append(label)
+            ngram_df = group.iloc[:n]
+            list_of_lists = ngram_df.values.tolist()
+            cols = [list(col) for col in zip(*list_of_lists)]
+            cols = [inner_list + [0] * (window_size-len(inner_list)) for inner_list in cols]
+            ngrams_val.append(cols)
+
     for id_value, group in test_data.groupby('case:concept:name'):
 
         group = group.reset_index(drop=True)
                 
         label = int(group['label'].dropna().iloc[0])
+        if label == 0:
+            idx = group[group['concept:name_str'].str.contains(r'\bRelease\b', na=False)].index
+            if not idx.empty:
+                group = group.iloc[:idx[0]]
+
         if len(group) > window_size:
             group = group.iloc[:window_size]
 
-        group = group.drop(columns=["label", "case:concept:name", "time:timestamp"])
+        group = group.drop(columns=["label", "case:concept:name", "time:timestamp", "lifecycle:transition", "concept:name_str", "rule_1", "rule_2", "rule_3", "rule_4", "rule_5"])
         
         feature_names = group.columns.tolist()
         for n in range(1, len(group), 1):
@@ -100,7 +138,7 @@ def create_ngrams(data, train_ids, test_ids, window_size=10):
             cols = [inner_list + [0] * (window_size-len(inner_list)) for inner_list in cols]
             ngrams_test.append(cols)
 
-    return ngrams_training, labels_training, ngrams_test, labels_test, feature_names
+    return ngrams_training, labels_training, ngrams_val, labels_val, ngrams_test, labels_test, feature_names
 
 def create_train_val_test_split(data, train_ratio=0.8, val_ratio=0.2, test_ratio=0.2):
     data = data.sort_values(by=['case:concept:name', 'time:timestamp'])
