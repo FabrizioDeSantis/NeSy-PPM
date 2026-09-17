@@ -411,24 +411,24 @@ for epoch in range(args.num_epochs_nesy):
             ])
         else:
             if gat_r1 > threshold:
-                formulas.extend([
+                formulas_knowledge.extend([
                     Forall(x_All, Implies(lactic_acid_high(x_All), P(x_All))),
                 ])
             if gat_r2 > threshold:
-                formulas.extend([
+                formulas_knowledge.extend([
                     Forall(x_All, P(x_All), cond_vars=[x_All], cond_fn = lambda x: (x.value[:, :13].eq(1).any(dim=1)) & (x.value[:, 39:52].eq(1).any(dim=1)) & (x.value[:, 65:78].eq(1).any(dim=1))),
                     Forall(x_All, Implies(And(check_presence_crp_atb(x_All), check_crp_100(x_All)), P(x_All))),
                 ])
             if gat_r3 > threshold:
-                formulas.extend([
+                formulas_knowledge.extend([
                     Forall(x_All, Implies(tachypnea_supsinf_crithr(x_All), P(x_All))),
                 ])
             if gat_r4 > threshold:
-                formulas.extend([
+                formulas_knowledge.extend([
                     Forall(x_All, Implies(check_crp_less_10(x_All), P(x_All))),
                 ])
             if gat_r5 > threshold:
-                formulas.extend([
+                formulas_knowledge.extend([
                     Forall(x_All, Implies(has_sirs2ormore(x_All), P(x_All)))
                 ])
         if epoch == 5:

@@ -355,22 +355,22 @@ for epoch in range(args.num_epochs_nesy):
             ])
         else:
             if gat_r1 >= threshold:
-                formulas.extend([
+                formulas_knowledge.extend([
                     Forall(x_All, P(x_All), cond_vars=[x_All], cond_fn = lambda x: (x.value[:, :10] == 1).any(dim=1)),
                     Forall(x_All, P(x_All), cond_vars=[x_All], cond_fn = lambda x: ((x.value[:, :10] == 7).any(dim=1) & (x.value[:, 100:110].max(dim=1).values < x.value[:, 90]))),
                     Forall(x_All, P(x_All), cond_vars=[x_All], cond_fn = lambda x: (x.value[:, 90] > scalers["amount"].transform([[400]])[0][0])),
                     Forall(x_All, Implies(check_add_penality(x_All), P(x_All))),
                 ])
-            if gat_r2 >= threshold:
+            if len(formulas_knowledge) >= threshold:
                 formulas.extend([
                     Forall(x_All, Implies(payment_less_fine(x_All), P(x_All))),
                 ])
             if gat_r3 >= threshold:
-                formulas.extend([
+                formulas_knowledge.extend([
                     Forall(x_All, Implies(amount_greater_than_400(x_All), P(x_All))),
                 ])
             if gat_r4 >= threshold:
-                formulas.extend([
+                formulas_knowledge.extend([
                     Forall(x_All, Implies(vehicle_class_A(x_All), P(x_All))),
                 ])
         if epoch == 5:

@@ -560,27 +560,27 @@ for epoch in range(args.num_epochs_nesy):
             ])
         else:
             if gat_r1 > threshold:
-                formulas.extend([
+                formulas_knowledge.extend([
                     Forall(x_All, Not(P(x_All)), cond_vars=[x_All], cond_fn = lambda x: (x.value[:, 200:240] < scalers["case:AMOUNT_REQ"].transform([[10000]])[0][0]).any(dim=1))
                 ])
             if gat_r2 > threshold:
-                formulas.extend([
+                formulas_knowledge.extend([
                     Forall(x_All, Not(P(x_All)), cond_vars=[x_All], cond_fn = lambda x: ((x.value[:, 200:240] > scalers["case:AMOUNT_REQ"].transform([[50000]])[0][0]).any(dim=1) & (x.value[:, 200:240] < scalers["case:AMOUNT_REQ"].transform([[60000]])[0][0]).any(dim=1)))
                 ])
             if gat_r3 > threshold:
-                formulas.extend([
+                formulas_knowledge.extend([
                     Forall(x_All, Not(P(x_All)), cond_vars=[x_All], cond_fn = lambda x: (x.value[:, :240] == 48).any(dim=1)),
                 ])
             if gat_r4 > threshold:
-                formulas.extend([
+                formulas_knowledge.extend([
                     Forall(x_All, Not(P(x_All)), cond_vars=[x_All], cond_fn = lambda x: (x.value[:, :240] == 21).any(dim=1)),
                 ])
             if gat_r5 > threshold:
-                formulas.extend([
+                formulas_knowledge.extend([
                     Forall(x_All, Implies(check_O_CANCELLED(x_All), Not(P(x_All)))).value
                 ])
             if gat_r6 > threshold:
-                formulas.extend([
+                formulas_knowledge.extend([
                     Forall(x_All, Implies(check_O_SENT_BACK(x_All), Not(P(x_All)))).value
                 ])
         if epoch == 1:

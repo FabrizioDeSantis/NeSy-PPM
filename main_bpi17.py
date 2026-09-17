@@ -368,15 +368,15 @@ for epoch in range(args.num_epochs_nesy):
             ])
         else:
             if gat_r1 > threshold:
-                formulas.append(Forall(x_All, Implies(credit_score_req_amount_less_20k(x_All), P(x_All))))
+                formulas_knowledge.append(Forall(x_All, Implies(credit_score_req_amount_less_20k(x_All), P(x_All))))
             if gat_r2 > threshold:
-                formulas.append(Forall(x_All, Implies(no_credit_score_greater_0(x_All), Not(P(x_All)))))
+                formulas_knowledge.append(Forall(x_All, Implies(no_credit_score_greater_0(x_All), Not(P(x_All)))))
             if gat_r3 > threshold:
-                formulas.append(Forall(x_All, Implies(loan_takeover_req_amount_greater_20k(x_All), Not(P(x_All)))))
+                formulas_knowledge.append(Forall(x_All, Implies(loan_takeover_req_amount_greater_20k(x_All), Not(P(x_All)))))
             if gat_r4 > threshold:
-                formulas.append(Forall(x_All, Implies(ex_loan_takeover(x_All), P(x_All))))
+                formulas_knowledge.append(Forall(x_All, Implies(ex_loan_takeover(x_All), P(x_All))))
             if gat_r5 > threshold:
-                formulas.append(Forall(x_All, Implies(application_type_new_credit(x_All), P(x_All))))
+                formulas_knowledge.append(Forall(x_All, Implies(application_type_new_credit(x_All), P(x_All))))
         if epoch == 5:
             with torch.no_grad():
                 sat_r1 += credit_score_req_amount_less_20k(x_All).value
