@@ -55,14 +55,17 @@ def create_test_set(data, seed, ratio=0.2):
 
     return training_ids, test_ids
 
-def create_ngrams(data, train_ids, test_ids, window_size=13):
+def create_ngrams(data, train_ids, val_ids,test_ids, window_size=13):
 
     ngrams_test = []
     ngrams_training = []
+    ngrams_val = []
     labels_training = []
     labels_test = []
+    labels_val = []
 
     training_data = data[data["case:concept:name"].isin(train_ids)]
+    val_data = data[data["case:concept:name"].isin(val_ids)]
     test_data = data[data["case:concept:name"].isin(test_ids)]
     max_len = 13
 
@@ -90,6 +93,30 @@ def create_ngrams(data, train_ids, test_ids, window_size=13):
             cols = [inner_list + [0] * (window_size-len(inner_list)) for inner_list in cols]
             ngrams_training.append(cols)
 
+    for id_value, group in val_data.groupby('case:concept:name'):
+
+        group = group.reset_index(drop=True)
+                
+        label = int(group['label'].dropna().iloc[0])
+        if label == 0:
+            idx = group[group['concept:name_str'].str.contains(r'\bRelease\b', na=False)].index
+            if not idx.empty:
+                group = group.iloc[:idx[0]]
+
+        if len(group) > window_size:
+            group = group.iloc[:window_size]
+
+        group = group.drop(columns=["label", "case:concept:name", "time:timestamp", "lifecycle:transition", "concept:name_str", "rule_1", "rule_2", "rule_3", "rule_4", "rule_5"])
+
+        feature_names = group.columns.tolist()
+        for n in range(1, len(group), 1):
+            labels_val.append(label)
+            ngram_df = group.iloc[:n]
+            list_of_lists = ngram_df.values.tolist()
+            cols = [list(col) for col in zip(*list_of_lists)]
+            cols = [inner_list + [0] * (window_size-len(inner_list)) for inner_list in cols]
+            ngrams_val.append(cols)
+
     for id_value, group in test_data.groupby('case:concept:name'):
 
         group = group.reset_index(drop=True)
@@ -114,14 +141,19 @@ def create_ngrams(data, train_ids, test_ids, window_size=13):
             cols = [inner_list + [0] * (window_size-len(inner_list)) for inner_list in cols]
             ngrams_test.append(cols)
 
-    return ngrams_training, labels_training, ngrams_test, labels_test, feature_names
+    return ngrams_training, labels_training, ngrams_val, labels_val, ngrams_test, labels_test, feature_names
 
-def create_train_val_test_split(data, train_ratio=0.8, val_ratio=0.2, test_ratio=0.2):
+def create_train_val_test_split(data, train_ratio=0.8, val_ratio=0.1, test_ratio=0.2):
+    # reorder data according to column 'case:concept:name' and time:timestamp from earliest to latest
     data = data.sort_values(by=['case:concept:name', 'time:timestamp'])
+    # Get unique graph IDs
     graph_ids = data['case:concept:name'].unique()
     num_graphs = len(graph_ids)
+    # take 20% of the graphs as test set
     test_size = int(num_graphs * test_ratio)
+    # take 10% of the remaining graphs as validation set
     val_size = int((num_graphs - test_size) * val_ratio)
+    # take remaining as training set
     train_size = num_graphs - test_size - val_size
     print(f"Total graphs: {num_graphs}, Train: {train_size}, Val: {val_size}, Test: {test_size}")
     train_ids = graph_ids[:train_size]
@@ -129,7 +161,7 @@ def create_train_val_test_split(data, train_ratio=0.8, val_ratio=0.2, test_ratio
     test_ids = graph_ids[train_size + val_size:]
     return train_ids, val_ids, test_ids
 
-def preprocess_eventlog(data, seed, setting="compliance"):
+def preprocess_eventlog(data, seed, setting):
 
     vocab_sizes = {}
     admissions = data[data["concept:name"] == "ER Registration"]
@@ -152,8 +184,6 @@ def preprocess_eventlog(data, seed, setting="compliance"):
     scaler_le = MinMaxScaler()
     scaler_crp = MinMaxScaler()
     scaler_age = MinMaxScaler()
-    scaler_elapsed = MinMaxScaler()
-    scaler_time_prev = MinMaxScaler()
     
     labels = data.groupby("case:concept:name")["label"].first().reset_index()
     print(data.columns)
@@ -184,18 +214,12 @@ def preprocess_eventlog(data, seed, setting="compliance"):
     data["Leucocytes"] = scaler_le.fit_transform(data[["Leucocytes"]])
     data["Age"] = data["Age"].fillna(0)
     data["Age"] = scaler_age.fit_transform(data[["Age"]])
-    data["elapsed_time"] = data["elapsed_time"].fillna(0)
-    data["elapsed_time"] = scaler_elapsed.fit_transform(data[["elapsed_time"]])
-    data["time_since_previous"] = data["time_since_previous"].fillna(0)
-    data["time_since_previous"] = scaler_time_prev.fit_transform(data[["time_since_previous"]])
 
     scalers = {
         "LacticAcid": scaler_la,
         "CRP": scaler_crp,
         "Leucocytes": scaler_le,
-        "Age": scaler_age,
-        "elapsed_time": scaler_elapsed,
-        "time_since_previous": scaler_time_prev
+        "Age": scaler_age
     }
 
     print(data.columns)
