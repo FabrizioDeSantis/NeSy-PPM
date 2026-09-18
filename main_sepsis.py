@@ -40,8 +40,11 @@ def get_args():
     parser.add_argument("--num_epochs", type=int, default=50, help="Number of epochs for training")
     parser.add_argument("--num_epochs_nesy", type=int, default=50, help="Number of epochs for training LTN model")
     parser.add_argument("--model_type", type=str, default="transformer", help="Type of model: lstm or transformer")
-    parser.add_argument("--train_vanilla", type=bool, default=True, help="Train vanilla LSTM model")
-    parser.add_argument("--train_nesy", type=bool, default=True, help="Train LTN model")
+    parser.add_argument("--train_vanilla", action="store_true", help="Train vanilla LSTM model")
+    parser.add_argument("--train_ltn_no_rules", action="store_true", help="Train LTN model without rules")
+    parser.add_argument("--train_ltn_no_pruning", action="store_true", help="Train LTN model without pruning")
+    parser.add_argument("--train_ltn_pruning", action="store_true", help="Train LTN model")
+    parser.add_argument("--train_ltn_no_pruning_weighted", action="store_true", help="Train LTN model without pruning with weighted loss")
     parser.add_argument("--setting", type=str, default="compliance", help="Setting for the experiment (compliance or temporal)")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
 
@@ -121,6 +124,7 @@ if args.train_vanilla:
     model.train()
     training_losses = []
     validation_losses = []
+    count_early_stop = 0
     for epoch in range(config.num_epochs):
         train_losses = []
         for enum, (x, y) in enumerate(train_loader):
@@ -152,17 +156,17 @@ if args.train_vanilla:
         f1 = f1_score(y_true, y_pred, average='macro')
         print(f"Validation Loss: {statistics.mean(val_losses)}")
         validation_losses.append(statistics.mean(val_losses))
-        if epoch >= 5:
-            if validation_losses[-1] > validation_losses[-2]:
-                print("Validation loss increased, stopping training")
-                break
         if f1 > max_f1_val:
             max_f1_val = f1
             torch.save(model.state_dict(), "best_model.pth")
-        model.train()
+            count_early_stop = 0
+        else:
+            count_early_stop += 1
+        if count_early_stop >= 5:
+            print("Early stopping triggered")
+            break
 
     model.load_state_dict(torch.load("best_model.pth"))
-
     model.eval()
     y_pred = []
     y_true = []
@@ -189,313 +193,385 @@ if args.train_vanilla:
     metrics_lstm.append(recall)
     print("Recall:", recall)
 
-# LTN
+if args.train_ltn_no_rules:
 
-if args.model_type == "transformer":
-    model = EventTransformer(vocab_sizes, config, feature_names, model_dim=128, num_classes=1, max_len=config.sequence_length, num_layers=1, num_heads=2, dropout=0.1).to(device)
-else:
-    model = LSTMModel(vocab_sizes, config, 1, feature_names).to(device)
-P = ltn.Predicate(model).to(device)
+    if args.model_type == "transformer":
+        model = EventTransformer(vocab_sizes, config, feature_names, model_dim=128, num_classes=1, max_len=config.sequence_length, num_layers=1, num_heads=2, dropout=0.1).to(device)
+    else:
+        model = LSTMModel(vocab_sizes, config, 1, feature_names).to(device)
+    P = ltn.Predicate(model).to(device)
 
-# Knowledge Theory
-Forall = ltn.Quantifier(ltn.fuzzy_ops.AggregPMeanError(p=2), quantifier="f")
-Not = ltn.Connective(ltn.fuzzy_ops.NotStandard())
-And = ltn.Connective(ltn.fuzzy_ops.AndProd())
-Or = ltn.Connective(ltn.fuzzy_ops.OrProbSum())
-Implies = ltn.Connective(ltn.fuzzy_ops.ImpliesReichenbach())
+    # Knowledge Theory
+    Forall = ltn.Quantifier(ltn.fuzzy_ops.AggregPMeanError(p=2), quantifier="f")
+    Not = ltn.Connective(ltn.fuzzy_ops.NotStandard())
+    And = ltn.Connective(ltn.fuzzy_ops.AndProd())
+    Or = ltn.Connective(ltn.fuzzy_ops.OrProbSum())
+    Implies = ltn.Connective(ltn.fuzzy_ops.ImpliesReichenbach())
 
-SatAgg = ltn.fuzzy_ops.SatAgg()
-params = list(P.parameters())
-optimizer = torch.optim.Adam(params, lr=config.learning_rate)
+    SatAgg = ltn.fuzzy_ops.SatAgg()
+    params = list(P.parameters())
+    optimizer = torch.optim.Adam(params, lr=config.learning_rate)
 
-max_f1_val = 0.0
-for epoch in range(args.num_epochs_nesy):
-    train_loss = 0.0
-    val_loss = 0.0
-    model.train()
-    for enum, (x, y) in enumerate(train_loader):
-        optimizer.zero_grad()
-        x_P = ltn.Variable("x_P", x[y==1])
-        x_not_P = ltn.Variable("x_not_P", x[y==0])
-        x_All = ltn.Variable("x_All", x)
-        x = x.to(device)
-        formulas = []
-        formulas_knowledge = []
-        if x_P.value.numel()>0:
-            formulas.extend([
-                Forall(x_P, P(x_P)),
-            ])
-        if x_not_P.value.numel()>0:
-            formulas.extend([
-                Forall(x_not_P, Not(P(x_not_P)))
-            ])
-        sat_agg = SatAgg(*formulas)
-        loss = 1 - sat_agg
-        loss.backward()
-        optimizer.step()
-        train_loss += loss.item()
-        del x_P, x_not_P, sat_agg
+    max_f1_val = 0.0
+    for epoch in range(args.num_epochs_nesy):
+        train_loss = 0.0
+        val_loss = 0.0
+        model.train()
+        for enum, (x, y) in enumerate(train_loader):
+            optimizer.zero_grad()
+            x_P = ltn.Variable("x_P", x[y==1])
+            x_not_P = ltn.Variable("x_not_P", x[y==0])
+            x_All = ltn.Variable("x_All", x)
+            x = x.to(device)
+            formulas = []
+            formulas_knowledge = []
+            if x_P.value.numel()>0:
+                formulas.extend([
+                    Forall(x_P, P(x_P)),
+                ])
+            if x_not_P.value.numel()>0:
+                formulas.extend([
+                    Forall(x_not_P, Not(P(x_not_P)))
+                ])
+            sat_agg = SatAgg(*formulas)
+            loss = 1 - sat_agg
+            loss.backward()
+            optimizer.step()
+            train_loss += loss.item()
+            del x_P, x_not_P, sat_agg
+        model.eval()
+        train_loss = train_loss / len(train_loader)
+        print(" epoch %d | loss %.4f"
+                    %(epoch, train_loss))
+
     model.eval()
-    train_loss = train_loss / len(train_loader)
-    print(" epoch %d | loss %.4f"
-                %(epoch, train_loss))
-    with torch.no_grad():
-        model.eval()
-        _, f1score, _, _, _ =compute_metrics(val_loader, model, device, "nesy", scalers, dataset)
-        if f1score > max_f1_val:
-            max_f1_val = f1score
-            torch.save(model.state_dict(), "best_model.pth")
-            count_early_stop = 0
-    model.train()
+    print("Metrics LTN no rules")
+    accuracy, f1score, precision, recall, compliance = compute_metrics(test_loader, model, device, "ltn_w_k", scalers, dataset)
+    print("Accuracy:", accuracy)
+    metrics_ltn_B.append(accuracy)
+    print("F1 Score:", f1score)
+    metrics_ltn_B.append(f1score)
+    print("Precision:", precision)
+    metrics_ltn_B.append(precision)
+    print("Recall:", recall)
+    metrics_ltn_B.append(recall)
+    print("Compliance:", compliance)
+    metrics_ltn_B.append(compliance)
 
-model.load_state_dict(torch.load("best_model.pth"))
-model.eval()
-print("Metrics LTN no rules")
-accuracy, f1score, precision, recall, compliance = compute_metrics(test_loader, model, device, "ltn_w_k", scalers, dataset)
-print("Accuracy:", accuracy)
-metrics_ltn_B.append(accuracy)
-print("F1 Score:", f1score)
-metrics_ltn_B.append(f1score)
-print("Precision:", precision)
-metrics_ltn_B.append(precision)
-print("Recall:", recall)
-metrics_ltn_B.append(recall)
-print("Compliance:", compliance)
-metrics_ltn_B.append(compliance)
+if args.train_ltn_no_pruning:
 
-# LTN_B
+    # LTN_B
 
-if args.model_type == "transformer":
-    model = EventTransformer(vocab_sizes, config, feature_names, model_dim=128, num_classes=1, max_len=config.sequence_length, num_layers=1, num_heads=2, dropout=0.1).to(device)
-else:
-    model = LSTMModel(vocab_sizes, config, 1, feature_names).to(device)
-P = ltn.Predicate(model).to(device)
-# Knowledge Theory
-Forall = ltn.Quantifier(ltn.fuzzy_ops.AggregPMeanError(p=2), quantifier="f")
-Not = ltn.Connective(ltn.fuzzy_ops.NotStandard())
-And = ltn.Connective(ltn.fuzzy_ops.AndProd())
-Or = ltn.Connective(ltn.fuzzy_ops.OrProbSum())
-Implies = ltn.Connective(ltn.fuzzy_ops.ImpliesReichenbach())
+    if args.model_type == "transformer":
+        model = EventTransformer(vocab_sizes, config, feature_names, model_dim=128, num_classes=1, max_len=config.sequence_length, num_layers=1, num_heads=2, dropout=0.1).to(device)
+    else:
+        model = LSTMModel(vocab_sizes, config, 1, feature_names).to(device)
+    P = ltn.Predicate(model).to(device)
+    # Knowledge Theory
+    Forall = ltn.Quantifier(ltn.fuzzy_ops.AggregPMeanError(p=2), quantifier="f")
+    Not = ltn.Connective(ltn.fuzzy_ops.NotStandard())
+    And = ltn.Connective(ltn.fuzzy_ops.AndProd())
+    Or = ltn.Connective(ltn.fuzzy_ops.OrProbSum())
+    Implies = ltn.Connective(ltn.fuzzy_ops.ImpliesReichenbach())
 
-SatAgg = ltn.fuzzy_ops.SatAgg()
-params = list(P.parameters())
-optimizer = torch.optim.Adam(params, lr=config.learning_rate)
+    SatAgg = ltn.fuzzy_ops.SatAgg()
+    params = list(P.parameters())
+    optimizer = torch.optim.Adam(params, lr=config.learning_rate)
 
-max_f1_val = 0.0
-for epoch in range(args.num_epochs_nesy):
-    train_loss = 0.0
-    val_loss = 0.0
-    model.train()
-    for enum, (x, y) in enumerate(train_loader):
-        optimizer.zero_grad()
-        x_P = ltn.Variable("x_P", x[y==1])
-        x_not_P = ltn.Variable("x_not_P", x[y==0])
-        x_All = ltn.Variable("x_All", x)
-        x = x.to(device)
-        formulas = []
-        formulas_knowledge = []
-        if x_P.value.numel()>0:
+    max_f1_val = 0.0
+    for epoch in range(args.num_epochs_nesy):
+        train_loss = 0.0
+        val_loss = 0.0
+        model.train()
+        for enum, (x, y) in enumerate(train_loader):
+            optimizer.zero_grad()
+            x_P = ltn.Variable("x_P", x[y==1])
+            x_not_P = ltn.Variable("x_not_P", x[y==0])
+            x_All = ltn.Variable("x_All", x)
+            x = x.to(device)
+            formulas = []
+            formulas_knowledge = []
+            if x_P.value.numel()>0:
+                formulas.extend([
+                    Forall(x_P, P(x_P)),
+                ])
+            if x_not_P.value.numel()>0:
+                formulas.extend([
+                    Forall(x_not_P, Not(P(x_not_P)))
+                ])
             formulas.extend([
-                Forall(x_P, P(x_P)),
-            ])
-        if x_not_P.value.numel()>0:
-            formulas.extend([
-                Forall(x_not_P, Not(P(x_not_P)))
-            ])
-        formulas.extend([
-            Forall(x_All, Implies(lactic_acid_high(x_All), P(x_All))),
-            Forall(x_All, Implies(tachypnea_supsinf_crithr(x_All), P(x_All))),
-            Forall(x_All, Implies(And(check_presence_crp_atb(x_All), check_crp_100(x_All)), P(x_All))),
-            Forall(x_All, Implies(check_crp_less_10(x_All), P(x_All))),
-            Forall(x_All, Implies(has_sirs2ormore(x_All), P(x_All)))
-        ])
-        sat_agg = SatAgg(*formulas)
-        loss = 1 - sat_agg
-        loss.backward()
-        optimizer.step()
-        train_loss += loss.item()
-        del x_P, x_not_P, sat_agg
-    train_loss = train_loss / len(train_loader)
-    print(" epoch %d | loss %.4f"
-                %(epoch, train_loss))
-    with torch.no_grad():
-        model.eval()
-        _, f1score, _, _, _ =compute_metrics(val_loader, model, device, "nesy", scalers, dataset)
-        if f1score > max_f1_val:
-            max_f1_val = f1score
-            torch.save(model.state_dict(), "best_model.pth")
-            count_early_stop = 0
-    model.train()
-
-model.load_state_dict(torch.load("best_model.pth"))
-model.eval()
-print("Metrics LTN w all rules")
-accuracy, f1score, precision, recall, compliance = compute_metrics(test_loader, model, device, "ltn_w_k", scalers, dataset)
-print("Accuracy:", accuracy)
-metrics_ltn_B.append(accuracy)
-print("F1 Score:", f1score)
-metrics_ltn_B.append(f1score)
-print("Precision:", precision)
-metrics_ltn_B.append(precision)
-print("Recall:", recall)
-metrics_ltn_B.append(recall)
-print("Compliance:", compliance)
-metrics_ltn_B.append(compliance)
-
-if args.model_type == "transformer":
-    model = EventTransformer(vocab_sizes, config, feature_names, model_dim=128, num_classes=1, max_len=config.sequence_length, num_layers=1, num_heads=2, dropout=0.1).to(device)
-else:
-    model = LSTMModel(vocab_sizes, config, 1, feature_names).to(device)
-P = ltn.Predicate(model).to(device)
-
-# Knowledge Theory
-Forall = ltn.Quantifier(ltn.fuzzy_ops.AggregPMeanError(p=2), quantifier="f")
-Not = ltn.Connective(ltn.fuzzy_ops.NotStandard())
-And = ltn.Connective(ltn.fuzzy_ops.AndProd())
-Or = ltn.Connective(ltn.fuzzy_ops.OrProbSum())
-Implies = ltn.Connective(ltn.fuzzy_ops.ImpliesReichenbach())
-
-SatAgg = ltn.fuzzy_ops.SatAgg()
-params = list(P.parameters())
-optimizer = torch.optim.Adam(params, lr=config.learning_rate)
-
-ERSepsisTriage = ltn.Constant(torch.tensor([1, 0, 0, 0]))
-Antibiotics = ltn.Constant(torch.tensor([0, 1, 0, 0]))
-Liquid = ltn.Constant(torch.tensor([0, 0, 1, 0]))
-Release_A = ltn.Constant(torch.tensor([0, 0, 0, 1]))
-
-def create_context_vector(antecedent, consequent):
-    mean_satisfaction = torch.mean(Implies(antecedent, consequent).value.unsqueeze(1))
-    satisfaction_variance = torch.var(Implies(antecedent, consequent).value.unsqueeze(1))
-    antecedent_coverage = torch.mean((antecedent.value > 0.5).float()).unsqueeze(0)
-    confidence = torch.sum(antecedent.value * consequent.value) / (torch.sum(antecedent.value) + 1e-6)
-    context_vector = torch.cat((mean_satisfaction.unsqueeze(0), satisfaction_variance.unsqueeze(0), antecedent_coverage, confidence.unsqueeze(0)), dim=0)
-    gating_score = mean_satisfaction.item()*math.exp(-satisfaction_variance.item())
-    gating_score = max(0.0, min(1.0, gating_score))
-    return context_vector, gating_score
-
-max_f1_val = 0.0
-gat_r1, gat_r2, gat_r3, gat_r4, gat_r5 = 0.0, 0.0, 0.0, 0.0, 0.0
-threshold = 0.2
-sat_r1, sat_r2, sat_r3, sat_r4, sat_r5, sat_main = [], [], [], [], [], []
-for epoch in range(args.num_epochs_nesy):
-    model.train()
-    train_loss = 0.0
-    for enum, (x, y) in enumerate(train_loader):
-
-        optimizer.zero_grad()
-        x = x.to(device)
-        
-        x_P = ltn.Variable("x_P", x[y==1])
-        x_not_P = ltn.Variable("x_not_P", x[y==0])
-        x_All = ltn.Variable("x_All", x)
-
-        formulas = []
-        formulas_knowledge = []
-
-        if x_P.value.numel()>0:
-            formulas.extend([
-                Forall(x_P, P(x_P)),
-            ])
-        if x_not_P.value.numel()>0:
-            formulas.extend([
-                Forall(x_not_P, Not(P(x_not_P))),
-            ])
-        if epoch <= 5:
-            formulas_knowledge.extend([
                 Forall(x_All, Implies(lactic_acid_high(x_All), P(x_All))),
-                Forall(x_All, Implies(And(check_presence_crp_atb(x_All), check_crp_100(x_All)), P(x_All))),
                 Forall(x_All, Implies(tachypnea_supsinf_crithr(x_All), P(x_All))),
+                Forall(x_All, Implies(And(check_presence_crp_atb(x_All), check_crp_100(x_All)), P(x_All))),
                 Forall(x_All, Implies(check_crp_less_10(x_All), P(x_All))),
                 Forall(x_All, Implies(has_sirs2ormore(x_All), P(x_All)))
             ])
-        else:
-            if gat_r1 > threshold:
+            sat_agg = SatAgg(*formulas)
+            loss = 1 - sat_agg
+            loss.backward()
+            optimizer.step()
+            train_loss += loss.item()
+            del x_P, x_not_P, sat_agg
+        model.eval()
+        train_loss = train_loss / len(train_loader)
+        print(" epoch %d | loss %.4f"
+                    %(epoch, train_loss))
+
+    model.eval()
+    print("Metrics LTN w all rules")
+    accuracy, f1score, precision, recall, compliance = compute_metrics(test_loader, model, device, "ltn_w_k", scalers, dataset)
+    print("Accuracy:", accuracy)
+    metrics_ltn_B.append(accuracy)
+    print("F1 Score:", f1score)
+    metrics_ltn_B.append(f1score)
+    print("Precision:", precision)
+    metrics_ltn_B.append(precision)
+    print("Recall:", recall)
+    metrics_ltn_B.append(recall)
+    print("Compliance:", compliance)
+    metrics_ltn_B.append(compliance)
+
+if args.train_ltn_pruning:
+
+    if args.model_type == "transformer":
+        model = EventTransformer(vocab_sizes, config, feature_names, model_dim=128, num_classes=1, max_len=config.sequence_length, num_layers=1, num_heads=2, dropout=0.1).to(device)
+    else:
+        model = LSTMModel(vocab_sizes, config, 1, feature_names).to(device)
+    P = ltn.Predicate(model).to(device)
+
+    # Knowledge Theory
+    Forall = ltn.Quantifier(ltn.fuzzy_ops.AggregPMeanError(p=2), quantifier="f")
+    Not = ltn.Connective(ltn.fuzzy_ops.NotStandard())
+    And = ltn.Connective(ltn.fuzzy_ops.AndProd())
+    Or = ltn.Connective(ltn.fuzzy_ops.OrProbSum())
+    Implies = ltn.Connective(ltn.fuzzy_ops.ImpliesReichenbach())
+
+    SatAgg = ltn.fuzzy_ops.SatAgg()
+    params = list(P.parameters())
+    optimizer = torch.optim.Adam(params, lr=config.learning_rate)
+
+    ERSepsisTriage = ltn.Constant(torch.tensor([1, 0, 0, 0]))
+    Antibiotics = ltn.Constant(torch.tensor([0, 1, 0, 0]))
+    Liquid = ltn.Constant(torch.tensor([0, 0, 1, 0]))
+    Release_A = ltn.Constant(torch.tensor([0, 0, 0, 1]))
+
+    def create_context_vector(antecedent, consequent):
+        mean_satisfaction = torch.mean(Implies(antecedent, consequent).value.unsqueeze(1))
+        satisfaction_variance = torch.var(Implies(antecedent, consequent).value.unsqueeze(1))
+        antecedent_coverage = torch.mean((antecedent.value > 0.5).float()).unsqueeze(0)
+        confidence = torch.sum(antecedent.value * consequent.value) / (torch.sum(antecedent.value) + 1e-6)
+        context_vector = torch.cat((mean_satisfaction.unsqueeze(0), satisfaction_variance.unsqueeze(0), antecedent_coverage, confidence.unsqueeze(0)), dim=0)
+        gating_score = mean_satisfaction.item()*math.exp(-satisfaction_variance.item())
+        gating_score = max(0.0, min(1.0, gating_score))
+        return context_vector, gating_score
+
+    max_f1_val = 0.0
+    gat_r1, gat_r2, gat_r3, gat_r4, gat_r5 = 0.0, 0.0, 0.0, 0.0, 0.0
+    threshold = 0.3
+    for epoch in range(args.num_epochs_nesy):
+        sat_r1, sat_r2, sat_r3, sat_r4, sat_r5, sat_main = [], [], [], [], [], []
+        model.train()
+        train_loss = 0.0
+        for enum, (x, y) in enumerate(train_loader):
+
+            optimizer.zero_grad()
+            x = x.to(device)
+            
+            x_P = ltn.Variable("x_P", x[y==1])
+            x_not_P = ltn.Variable("x_not_P", x[y==0])
+            x_All = ltn.Variable("x_All", x)
+
+            formulas = []
+            formulas_knowledge = []
+
+            if x_P.value.numel()>0:
+                formulas.extend([
+                    Forall(x_P, P(x_P)),
+                ])
+            if x_not_P.value.numel()>0:
+                formulas.extend([
+                    Forall(x_not_P, Not(P(x_not_P))),
+                ])
+            if epoch <= 5:
                 formulas_knowledge.extend([
                     Forall(x_All, Implies(lactic_acid_high(x_All), P(x_All))),
-                ])
-            if gat_r2 > threshold:
-                formulas_knowledge.extend([
-                    Forall(x_All, P(x_All), cond_vars=[x_All], cond_fn = lambda x: (x.value[:, :13].eq(1).any(dim=1)) & (x.value[:, 39:52].eq(1).any(dim=1)) & (x.value[:, 65:78].eq(1).any(dim=1))),
                     Forall(x_All, Implies(And(check_presence_crp_atb(x_All), check_crp_100(x_All)), P(x_All))),
-                ])
-            if gat_r3 > threshold:
-                formulas_knowledge.extend([
                     Forall(x_All, Implies(tachypnea_supsinf_crithr(x_All), P(x_All))),
-                ])
-            if gat_r4 > threshold:
-                formulas_knowledge.extend([
                     Forall(x_All, Implies(check_crp_less_10(x_All), P(x_All))),
-                ])
-            if gat_r5 > threshold:
-                formulas_knowledge.extend([
                     Forall(x_All, Implies(has_sirs2ormore(x_All), P(x_All)))
                 ])
-        if epoch == 5:
-            with torch.no_grad():
-                sat_r1 += lactic_acid_high(x_All).value
-                sat_r2 += And(check_presence_crp_atb(x_All), check_crp_100(x_All)).value
-                sat_r3 += tachypnea_supsinf_crithr(x_All).value
-                sat_r4 += check_crp_less_10(x_All).value
-                sat_r5 += has_sirs2ormore(x_All).value
-                sat_main += P(x_All).value
-        sat_agg = SatAgg(*formulas)
-        if len(formulas_knowledge) > 0:
-            sat_agg_knowledge = SatAgg(*formulas_knowledge)
-            loss = 1 - (0.8*sat_agg + 0.2*sat_agg_knowledge)
-        else:
-            loss = 1 - sat_agg
-        loss.backward()
-        optimizer.step()
-        train_loss += loss.item()
-        del x_P, x_not_P, sat_agg
-    train_loss = train_loss / len(train_loader)
-    print(" epoch %d | loss %.4f"
-                %(epoch, train_loss))
-    if epoch == 5:
-        sat_r1 = torch.stack(sat_r1).to(device)
-        sat_r2 = torch.stack(sat_r2).to(device)
-        sat_r3 = torch.stack(sat_r3).to(device)
-        sat_r4 = torch.stack(sat_r4).to(device)
-        sat_r5 = torch.stack(sat_r5).to(device)
-        sat_main = torch.stack(sat_main).to(device)
-        sat_r1 = ltn.LTNObject(sat_r1, ["x_All"])
-        sat_r2 = ltn.LTNObject(sat_r2, ["x_All"])
-        sat_r3 = ltn.LTNObject(sat_r3, ["x_All"])
-        sat_r4 = ltn.LTNObject(sat_r4, ["x_All"])
-        sat_r5 = ltn.LTNObject(sat_r5, ["x_All"])
-        sat_main = ltn.LTNObject(sat_main, ["x_All"])
-        c1, gat_r1 = create_context_vector(sat_r1, sat_main)
-        c2, gat_r2 = create_context_vector(sat_r2, sat_main)
-        c3, gat_r3 = create_context_vector(sat_r3, sat_main)
-        c4, gat_r4 = create_context_vector(sat_r4, sat_main)
-        c5, gat_r5 = create_context_vector(sat_r5, sat_main)
-        print("Gating scores after epoch 5:")
-        print("Rule 1:", gat_r1)
-        print("Rule 2:", gat_r2)
-        print("Rule 3:", gat_r3)
-        print("Rule 4:", gat_r4)
-        print("Rule 5:", gat_r5)
-    with torch.no_grad():
-        model.eval()
+            else:
+                if gat_r1 > threshold:
+                    formulas_knowledge.extend([
+                        Forall(x_All, Implies(lactic_acid_high(x_All), P(x_All))),
+                    ])
+                if gat_r2 > threshold:
+                    formulas_knowledge.extend([
+                        Forall(x_All, Implies(And(check_presence_crp_atb(x_All), check_crp_100(x_All)), P(x_All))),
+                    ])
+                if gat_r3 > threshold:
+                    formulas_knowledge.extend([
+                        Forall(x_All, Implies(tachypnea_supsinf_crithr(x_All), P(x_All))),
+                    ])
+                if gat_r4 > threshold:
+                    formulas_knowledge.extend([
+                        Forall(x_All, Implies(check_crp_less_10(x_All), P(x_All))),
+                    ])
+                if gat_r5 > threshold:
+                    formulas_knowledge.extend([
+                        Forall(x_All, Implies(has_sirs2ormore(x_All), P(x_All)))
+                    ])
+            if epoch == 5:
+                with torch.no_grad():
+                    sat_r1 += lactic_acid_high(x_All).value
+                    sat_r2 += And(check_presence_crp_atb(x_All), check_crp_100(x_All)).value
+                    sat_r3 += tachypnea_supsinf_crithr(x_All).value
+                    sat_r4 += check_crp_less_10(x_All).value
+                    sat_r5 += has_sirs2ormore(x_All).value
+                    sat_main += P(x_All).value
+            sat_agg = SatAgg(*formulas)
+            if len(formulas_knowledge) > 0:
+                sat_agg_knowledge = SatAgg(*formulas_knowledge)
+                loss = 1 - (0.8*sat_agg + 0.2*sat_agg_knowledge)
+            else:
+                loss = 1 - sat_agg
+            loss.backward()
+            optimizer.step()
+            train_loss += loss.item()
+            del x_P, x_not_P, sat_agg
+        train_loss = train_loss / len(train_loader)
+        print(" epoch %d | loss %.4f"
+                    %(epoch+1, train_loss))
         _, f1score, _, _, _ =compute_metrics(val_loader, model, device, "nesy", scalers, dataset)
         if f1score > max_f1_val:
             max_f1_val = f1score
-            torch.save(model.state_dict(), "best_model.pth")
+            torch.save(model.state_dict(), "ltn_w_k.pth")
             count_early_stop = 0
-    model.train()
+        else:
+            count_early_stop += 1
+        if count_early_stop >= 8:
+            print("Early stopping triggered")
+            break
+        if epoch == 5:
+            sat_r1 = torch.stack(sat_r1).to(device)
+            sat_r2 = torch.stack(sat_r2).to(device)
+            sat_r3 = torch.stack(sat_r3).to(device)
+            sat_r4 = torch.stack(sat_r4).to(device)
+            sat_r5 = torch.stack(sat_r5).to(device)
+            sat_main = torch.stack(sat_main).to(device)
+            sat_r1 = ltn.LTNObject(sat_r1, ["x_All"])
+            sat_r2 = ltn.LTNObject(sat_r2, ["x_All"])
+            sat_r3 = ltn.LTNObject(sat_r3, ["x_All"])
+            sat_r4 = ltn.LTNObject(sat_r4, ["x_All"])
+            sat_r5 = ltn.LTNObject(sat_r5, ["x_All"])
+            sat_main = ltn.LTNObject(sat_main, ["x_All"])
+            c1, gat_r1 = create_context_vector(sat_r1, sat_main)
+            c2, gat_r2 = create_context_vector(sat_r2, sat_main)
+            c3, gat_r3 = create_context_vector(sat_r3, sat_main)
+            c4, gat_r4 = create_context_vector(sat_r4, sat_main)
+            c5, gat_r5 = create_context_vector(sat_r5, sat_main)
+            print("Gating scores after epoch 5:")
+            print("Rule 1:", gat_r1)
+            print("Rule 2:", gat_r2)
+            print("Rule 3:", gat_r3)
+            print("Rule 4:", gat_r4)
+            print("Rule 5:", gat_r5)
 
-model.load_state_dict(torch.load("best_model.pth"))
-model.eval()
-print("Metrics LTN w pruning")
-accuracy, f1score, precision, recall, compliance = compute_metrics(test_loader, model, device, "nesy", scalers, dataset)
-print("Accuracy:", accuracy)
-metrics_ltn_B.append(accuracy)
-print("F1 Score:", f1score)
-metrics_ltn_B.append(f1score)
-print("Precision:", precision)
-metrics_ltn_B.append(precision)
-print("Recall:", recall)
-metrics_ltn_B.append(recall)
-print("Compliance:", compliance)
-metrics_ltn_B.append(compliance)
+    model.load_state_dict(torch.load("ltn_w_k.pth"))
+    model.eval()
+    print("Metrics LTN w pruning")
+    accuracy, f1score, precision, recall, compliance = compute_metrics(test_loader, model, device, "nesy", scalers, dataset)
+    print("Accuracy:", accuracy)
+    metrics_ltn_B.append(accuracy)
+    print("F1 Score:", f1score)
+    metrics_ltn_B.append(f1score)
+    print("Precision:", precision)
+    metrics_ltn_B.append(precision)
+    print("Recall:", recall)
+    metrics_ltn_B.append(recall)
+    print("Compliance:", compliance)
+    metrics_ltn_B.append(compliance)
+
+if args.train_ltn_no_pruning_weighted:
+    
+    if args.model_type == "transformer":
+        model = EventTransformer(vocab_sizes, config, feature_names, model_dim=128, num_classes=1, max_len=config.sequence_length, num_layers=1, num_heads=2, dropout=0.1).to(device)
+    else:
+        model = LSTMModel(vocab_sizes, config, 1, feature_names).to(device)
+    P = ltn.Predicate(model).to(device)
+    # Knowledge Theory
+    Forall = ltn.Quantifier(ltn.fuzzy_ops.AggregPMeanError(p=2), quantifier="f")
+    Not = ltn.Connective(ltn.fuzzy_ops.NotStandard())
+    And = ltn.Connective(ltn.fuzzy_ops.AndProd())
+    Or = ltn.Connective(ltn.fuzzy_ops.OrProbSum())
+    Implies = ltn.Connective(ltn.fuzzy_ops.ImpliesReichenbach())
+
+    SatAgg = ltn.fuzzy_ops.SatAgg()
+    params = list(P.parameters())
+    optimizer = torch.optim.Adam(params, lr=config.learning_rate)
+
+    max_f1_val = 0.0
+    for epoch in range(args.num_epochs_nesy):
+        train_loss = 0.0
+        val_loss = 0.0
+        model.train()
+        for enum, (x, y) in enumerate(train_loader):
+            optimizer.zero_grad()
+            x_P = ltn.Variable("x_P", x[y==1])
+            x_not_P = ltn.Variable("x_not_P", x[y==0])
+            x_All = ltn.Variable("x_All", x)
+            x = x.to(device)
+            formulas = []
+            formulas_knowledge = []
+            if x_P.value.numel()>0:
+                formulas.extend([
+                    Forall(x_P, P(x_P)),
+                ])
+            if x_not_P.value.numel()>0:
+                formulas.extend([
+                    Forall(x_not_P, Not(P(x_not_P)))
+                ])
+            formulas_knowledge.extend([
+                Forall(x_All, Implies(lactic_acid_high(x_All), P(x_All))),
+                Forall(x_All, Implies(tachypnea_supsinf_crithr(x_All), P(x_All))),
+                Forall(x_All, Implies(And(check_presence_crp_atb(x_All), check_crp_100(x_All)), P(x_All))),
+                Forall(x_All, Implies(check_crp_less_10(x_All), P(x_All))),
+                Forall(x_All, Implies(has_sirs2ormore(x_All), P(x_All)))
+            ])
+            sat_agg = SatAgg(*formulas)
+            sat_agg_knowledge = SatAgg(*formulas_knowledge)
+            loss = 1 - (0.8*sat_agg + 0.2*sat_agg_knowledge)
+            loss.backward()
+            optimizer.step()
+            train_loss += loss.item()
+            del x_P, x_not_P, sat_agg
+        model.eval()
+        train_loss = train_loss / len(train_loader)
+        _, f1score, _, _, _ =compute_metrics(val_loader, model, device, "nesy", scalers, dataset)
+        if f1score > max_f1_val:
+            max_f1_val = f1score
+            torch.save(model.state_dict(), "ltn_no_pruning_weighted.pth")
+            count_early_stop = 0
+        else:
+            count_early_stop += 1
+        if count_early_stop >= 8:
+            print("Early stopping triggered")
+            break
+        
+        print(" epoch %d | loss %.4f"
+                    %(epoch, train_loss))
+        
+    model.load_state_dict(torch.load("ltn_no_pruning_weighted.pth"))
+    model.eval()
+    print("Metrics LTN w weighted loss but no pruning")
+    accuracy, f1score, precision, recall, compliance = compute_metrics(test_loader, model, device, "ltn_w_k", scalers, dataset)
+    print("Accuracy:", accuracy)
+    metrics_ltn_B.append(accuracy)
+    print("F1 Score:", f1score)
+    metrics_ltn_B.append(f1score)
+    print("Precision:", precision)
+    metrics_ltn_B.append(precision)
+    print("Recall:", recall)
+    metrics_ltn_B.append(recall)
+    print("Compliance:", compliance)
+    metrics_ltn_B.append(compliance)
