@@ -9,8 +9,6 @@ R2: Patients with Tachypnea, Suspected Infection, and Critical Heart Rate, shoul
     Forall x (Tachypnea(x) AND SuspectedInfection(x) AND CriticalHeartRate(x) -> ICU(x))
 R3: Patients with CRP activity followed by IV Antibiotics and with CRP value > 100 should be admitted to the ICU. 
     Forall x (CRP(x) AND IVAntibiotics(x) AND CRPValue(x) > 100 -> ICU(x))
-R4: If antibiotics are administered within 2 hours after sepsis triage, the patient should not be admitted to the ICU.
-    Forall x WaitTime(x, ERSepsisTriage, IV Antibiotics) <= 2 -> Not(ICU(x))
 R4: The activity ERSepsisTriage should immeditely follow the activity ERTriage.
 R5: If the activity ERSepsisTriage occurs, the activity IV Antibiotics should occur after ERSepsisTriage.
 R6: If the activity ERSepsisTriage occurs, the activity IV Liquid should occur after ERSepsisTriage.
