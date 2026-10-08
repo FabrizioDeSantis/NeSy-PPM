@@ -1,4 +1,6 @@
 import argparse
+import itertools
+import json
 import math
 import statistics
 import warnings
@@ -9,6 +11,7 @@ import ltn
 import numpy as np
 import pandas as pd
 import torch
+import torch.nn.functional as F
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 from torch.utils.data import DataLoader
 
@@ -30,6 +33,7 @@ DATA_PATH = f"data_processed/{DATASET}.csv"
 BATCH_SIZE = 32
 SEQUENCE_LENGTH = 10
 CHECKPOINT_PATH = "best_model.pth"
+ADAPTIVE_CHECKPOINT = "traffic_ltn_adaptive_align.pth"
 
 # Loss mixing: loss = 1 - (DATA_WEIGHT * data_sat + KNOWLEDGE_WEIGHT * knowledge_sat)
 DATA_WEIGHT = 0.8
@@ -49,10 +53,13 @@ PRUNING_CALIBRATION_EPOCH = 5   # rule statistics are collected in this epoch; p
 PRUNING_GATE_THRESHOLD = 0.6    # a rule stays active if its gate is >= this value
 PRUNING_VARIANCE_PENALTY = 2.0
 
-# Adaptive rule weighting
-ADAPTIVE_EMA_DECAY = 0.8
-ADAPTIVE_UNIFORM_MIX = 0.1      # share of the weights that stays uniform
-ADAPTIVE_VARIANCE_PENALTY = 2.0
+# Adaptive rule weighting (gradient-alignment version)
+ADAPTIVE_WARMUP_EPOCHS = 5            # uniform weights during warm-up (E_p)
+ADAPTIVE_ALIGN_LR = 1.0               # eta of the exponentiated-gradient update
+ADAPTIVE_ALIGN_BATCHES = 8            # train batches used to estimate each rule's gradient
+ADAPTIVE_HEAD_TENSORS = 2             # last N parameter tensors = classification head (weight + bias)
+ADAPTIVE_FLOOR_START = 0.1            # uniform floor epsilon right after warm-up ...
+ADAPTIVE_FLOOR_ANNEAL_EPOCHS = 15     # ... annealed linearly to 0 over this many epochs
 
 
 def block(index):
@@ -105,6 +112,8 @@ def get_args():
     parser.add_argument("--setting", type=str, default="compliance",
                         help="Setting for the experiment (compliance or temporal)")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
+    parser.add_argument("--results_path", type=str, default=None,
+                        help="If set, dump the metrics of all experiments to this JSON file")
     return parser.parse_args()
 
 
@@ -487,69 +496,95 @@ def run_ltn_pruning(ctx):
                    on_epoch_end=lambda epoch, model: pruner.update_gates(epoch))
 
 
-class AdaptiveRuleWeights:
-    """Per-rule weights re-estimated every epoch from how well each rule holds.
+# --------------------------------------------------------------------------- #
+# Adaptive rule weighting via gradient alignment
+# --------------------------------------------------------------------------- #
 
-    Raw reliability scores are smoothed with an exponential moving average, normalised,
-    and mixed with a uniform floor so no rule is ever fully switched off.
+def _flat_grad(loss, params):
+    """Gradient of `loss` w.r.t. `params`, flattened into one vector (zeros for unused params)."""
+    grads = torch.autograd.grad(loss, params, allow_unused=True)
+    return torch.cat([(g if g is not None else torch.zeros_like(p)).flatten()
+                      for g, p in zip(grads, params)])
+
+
+class AlignmentRuleWeights:
+    """Per-rule weights driven by *usefulness*, not consistency.
+
+    Once per epoch (after warm-up) we measure, on the head parameters only,
+
+        c_r = cos( grad of rule-r loss on train batches ,  grad of data loss on validation set )
+
+    and run an exponentiated-gradient step on per-rule logits:  logits_r += eta * c_r.
+    Rules whose gradient points against the validation data gradient (c_r < 0) decay
+    towards zero; helpful rules grow.  The uniform floor epsilon is annealed to 0, so a
+    harmful rule can end up effectively pruned (soft version of the two-stage pruning).
+    Weights always sum to one and are computed outside the training graph.
     """
 
-    def __init__(self, rules, device):
-        self.rules = rules
-        self.device = device
-        self.weights = torch.full((len(rules),), 1 / len(rules), device=device)
-        self._ema = None
-        self._reset()
+    def __init__(self, ctx):
+        self.ctx = ctx
+        self.rules = ctx.rules
+        n_rules = len(self.rules)
+        self.logits = torch.zeros(n_rules, device=ctx.device)
+        self.weights = torch.full((n_rules,), 1 / n_rules, device=ctx.device)
 
-    def _reset(self):
-        self._antecedent_truth = [[] for _ in self.rules]
-        self._p_truth = []
+    def _floor(self, epoch):
+        steps_since_warmup = epoch + 1 - ADAPTIVE_WARMUP_EPOCHS      # 0 at the first update
+        return ADAPTIVE_FLOOR_START * max(0.0, 1 - steps_since_warmup / ADAPTIVE_FLOOR_ANNEAL_EPOCHS)
 
-    def observe(self, P, x_all):
-        with torch.no_grad():
-            for store, rule in zip(self._antecedent_truth, self.rules):
-                store.append(rule.antecedent(x_all).value)
-            self._p_truth.append(P(x_all).value)
+    def _data_gradient(self, P, params):
+        total = torch.zeros(sum(p.numel() for p in params), device=self.ctx.device)
+        for x, y in self.ctx.val_loader:
+            loss = 1 - SatAgg(*supervised_formulas(P, x.to(self.ctx.device), y))
+            total += _flat_grad(loss, params)
+        return total
 
-    def update(self):
-        with torch.no_grad():
-            consequent = ltn.LTNObject(torch.cat(self._p_truth), ["x_All"])
-            raw_scores = torch.tensor(
-                [rule_reliability(ltn.LTNObject(torch.cat(truth), ["x_All"]), consequent,
-                                  ADAPTIVE_VARIANCE_PENALTY, fired_only=True)
-                 for truth in self._antecedent_truth],
-                device=self.device)
+    def _rule_gradients(self, P, params):
+        n_params = sum(p.numel() for p in params)
+        totals = [torch.zeros(n_params, device=self.ctx.device) for _ in self.rules]
+        for x, _ in itertools.islice(self.ctx.train_loader, ADAPTIVE_ALIGN_BATCHES):
+            x_all = ltn.Variable("x_All", x.to(self.ctx.device))
+            for i, formula in enumerate(rule_formulas(self.rules, P, x_all)):
+                totals[i] += _flat_grad(1 - formula.value, params)
+        return totals
 
-            if self._ema is None:
-                self._ema = raw_scores.clone()
-            else:
-                self._ema = ADAPTIVE_EMA_DECAY * self._ema + (1 - ADAPTIVE_EMA_DECAY) * raw_scores
+    def update(self, epoch, model):
+        if epoch + 1 < ADAPTIVE_WARMUP_EPOCHS:
+            return
+        P = ltn.Predicate(model).to(self.ctx.device)
+        params = list(model.parameters())[-ADAPTIVE_HEAD_TENSORS:]
 
-            n_rules = len(self.rules)
-            if self._ema.sum().item() > 0:
-                self.weights = (ADAPTIVE_UNIFORM_MIX / n_rules
-                                + (1 - ADAPTIVE_UNIFORM_MIX) * self._ema / self._ema.sum())
-            else:
-                self.weights = torch.full_like(self._ema, 1 / n_rules)
+        model.eval()  # no dropout noise in the gradients
+        # cuDNN RNNs refuse to backprop in eval mode, so disable cuDNN for this step (LSTM backbone).
+        with torch.backends.cudnn.flags(enabled=False):
+            g_data = self._data_gradient(P, params)
+            g_rules = self._rule_gradients(P, params)
 
-            print("Rule weights:", self.weights.cpu().tolist())
-            self._reset()
+        # A rule that never fires in the sampled batches has a zero gradient -> cosine 0 (neutral).
+        alignment = torch.stack([F.cosine_similarity(g, g_data, dim=0, eps=1e-12) for g in g_rules])
+
+        self.logits += ADAPTIVE_ALIGN_LR * alignment
+        floor = self._floor(epoch)
+        n_rules = len(self.rules)
+        self.weights = floor / n_rules + (1 - floor) * torch.softmax(self.logits, dim=0)
+
+        print("Rule alignment:", [round(v, 3) for v in alignment.cpu().tolist()])
+        print("Rule weights:  ", [round(v, 3) for v in self.weights.cpu().tolist()])
 
 
 def run_ltn_adaptive(ctx):
-    adaptive = AdaptiveRuleWeights(ctx.rules, ctx.device)
+    adaptive = AlignmentRuleWeights(ctx)
 
     def batch_loss(P, epoch, x, y):
         x_all = ltn.Variable("x_All", x)
         data_sat = SatAgg(*supervised_formulas(P, x, y))
         rule_sats = torch.stack([f.value for f in rule_formulas(ctx.rules, P, x_all)])
         knowledge_sat = weighted_p_mean_error(rule_sats, adaptive.weights)
-        adaptive.observe(P, x_all)
         return mixed_loss(data_sat, knowledge_sat)
 
-    return run_ltn(ctx, "LTN w adaptive rule weights", "ltn_w_k", batch_loss,
-                   patience=ADAPTIVE_PATIENCE,
-                   on_epoch_end=lambda epoch, model: adaptive.update())
+    return run_ltn(ctx, "LTN w adaptive rule weights (gradient alignment)", "ltn_w_k", batch_loss,
+                   patience=ADAPTIVE_PATIENCE, checkpoint_path=ADAPTIVE_CHECKPOINT,
+                   on_epoch_end=adaptive.update)
 
 
 # --------------------------------------------------------------------------- #
@@ -573,6 +608,10 @@ def main():
     for enabled, name, run in experiments:
         if enabled:
             results[name] = run(ctx)
+
+    if args.results_path:
+        with open(args.results_path, "w") as f:
+            json.dump(results, f, default=float)
     return results
 
 
