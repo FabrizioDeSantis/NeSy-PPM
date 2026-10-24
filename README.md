@@ -28,6 +28,7 @@ rules.
 - [Outputs](#outputs)
 - [Repository structure](#repository-structure)
 - [Extending](#extending)
+- [Citation](#citation)
 
 ## Setup
 
