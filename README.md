@@ -276,3 +276,21 @@ legacy/                    the previous per-dataset scripts, kept for reference 
 - **A new dataset:** write `data/preprocess_<name>.py` with `FEATURES`, `WINDOW_SIZE`, `create_test_set` and
   `encode_features` (see the existing ones), register it in `DATASETS` (`nesy/datasets.py`), and add its rules to
   `RULES` (`nesy/knowledge.py`).
+
+## Citation
+
+If you use this code, please cite:
+
+```bibtex
+@InProceedings{10.1007/978-981-92-1462-4_9,
+author="De Santis, Fabrizio
+and Park, Gyunam
+and Zanichelli, Francesco",
+title="Neuro-Symbolic Learning for Predictive Process Monitoring via Two-Stage Logic Tensor Networks with Rule Pruning",
+booktitle="Advances in Knowledge Discovery and Data Mining",
+year="2026",
+publisher="Springer Nature Singapore",
+address="Singapore",
+pages="104--118",
+}
+```
