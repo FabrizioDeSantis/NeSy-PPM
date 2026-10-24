@@ -1,7 +1,0 @@
-# Versions the code was tested with (Python 3.11)
-torch==2.8.0
-LTNtorch==1.0.2
-pm4py==2.7.12.1
-pandas==3.0.1
-numpy==2.0.2
-scikit-learn==1.4.2
