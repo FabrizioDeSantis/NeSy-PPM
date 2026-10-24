@@ -7,6 +7,27 @@ import seaborn as sns
 function_ra = lambda x, y: torch.tensor([(9.0 in x[i, :25]) and (6.0 in x[i, 25:50]) and (x[i, -25:] < 400).any() and (y[i] == 1) for i in range(x.shape[0])])
 function = lambda arr: (((arr[..., :25] == 9.0).any(dim=-1)) & (~((arr[..., :25] == 9.0) & (arr[..., -25:] != 0.0)).any(dim=-1))).int()
 
+# BPI12 rows are [resources | activities | amounts], each block BPI12_SEQUENCE_LENGTH long (see main_bpi12.py).
+BPI12_SEQUENCE_LENGTH = 40
+BPI12_RESOURCES = slice(0, BPI12_SEQUENCE_LENGTH)
+BPI12_AMOUNTS = slice(2 * BPI12_SEQUENCE_LENGTH, 3 * BPI12_SEQUENCE_LENGTH)
+BPI12_RESOURCE_ID_11169 = 48
+BPI12_RESOURCE_ID_10910 = 21
+
+def bpi12_rules(scalers):
+    """Antecedents of the BPI12 rules checked by the compliance metric (same definitions as main_bpi12.py):
+    (amount < 10k, amount > 50k, amount < 60k, resource 11169, resource 10910)."""
+    scaled = lambda amount: scalers["case:AMOUNT_REQ"].transform([[amount]])[0][0]
+    t_10k, t_50k, t_60k = scaled(10000), scaled(50000), scaled(60000)
+    amounts = lambda x: x[:, BPI12_AMOUNTS]
+    # `> 0` skips padded positions.
+    rule_amount_1 = lambda x: ((amounts(x) > 0) & (amounts(x) < t_10k)).any(dim=1)
+    rule_amount_2 = lambda x: (amounts(x) > t_50k).any(dim=1)
+    rule_amount_3 = lambda x: ((amounts(x) > 0) & (amounts(x) < t_60k)).any(dim=1)
+    rule_resource_1 = lambda x: (x[:, BPI12_RESOURCES] == BPI12_RESOURCE_ID_11169).any(dim=1)
+    rule_resource_2 = lambda x: (x[:, BPI12_RESOURCES] == BPI12_RESOURCE_ID_10910).any(dim=1)
+    return rule_amount_1, rule_amount_2, rule_amount_3, rule_resource_1, rule_resource_2
+
 def plot_f1_accuracy(predictions_vanilla, ytrue_vanilla, lengths_vanilla, predictions_nesy, ytrue_nesy, lenghts_nesy, predictions_nesy_w_c, ytrue_nesy_w_c, lenghts_nesy_w_c, dataset_size, mode):
 
     # --- Calculation ---
@@ -435,11 +456,7 @@ def compute_metrics_fa(loader, model, device, mode, scalers, dataset):
         rule_crp_100 = lambda x: (x[:, 338:351] > scalers["CRP"].transform([[100]])[0][0]).any(dim=1)
     ### BPI12 RULES
     if dataset == "bpi12":
-        rule_amount_1 = lambda x: (x[:, 200:240] < scalers["case:AMOUNT_REQ"].transform([[10000]])[0][0]).any(dim=1)
-        rule_amount_2 = lambda x: (x[:, 200:240] > scalers["case:AMOUNT_REQ"].transform([[50000]])[0][0]).any(dim=1)
-        rule_amount_3 = lambda x: (x[:, 200:240] < scalers["case:AMOUNT_REQ"].transform([[60000]])[0][0]).any(dim=1)
-        rule_resource_1 = lambda x: (x[:, :240] == 48).any(dim=1)
-        rule_resource_2 = lambda x: (x[:, :240] == 21).any(dim=1)
+        rule_amount_1, rule_amount_2, rule_amount_3, rule_resource_1, rule_resource_2 = bpi12_rules(scalers)
     # TRAFFIC RULES
     if dataset == "traffic_fines":
         rule_penalty = lambda x: (x[:, :10] == 1).any(dim=1)
@@ -577,11 +594,7 @@ def compute_metrics(loader, model, device, mode, scalers, dataset):
         rule_crp_100 = lambda x: (x[:, 338:351] > scalers["CRP"].transform([[100]])[0][0]).any(dim=1)
     # BPI12 RULES
     if dataset == "bpi12":
-        rule_amount_1 = lambda x: (x[:, 200:240] < scalers["case:AMOUNT_REQ"].transform([[10000]])[0][0]).any(dim=1)
-        rule_amount_2 = lambda x: (x[:, 200:240] > scalers["case:AMOUNT_REQ"].transform([[50000]])[0][0]).any(dim=1)
-        rule_amount_3 = lambda x: (x[:, 200:240] < scalers["case:AMOUNT_REQ"].transform([[60000]])[0][0]).any(dim=1)
-        rule_resource_1 = lambda x: (x[:, :240] == 48).any(dim=1)
-        rule_resource_2 = lambda x: (x[:, :240] == 21).any(dim=1)
+        rule_amount_1, rule_amount_2, rule_amount_3, rule_resource_1, rule_resource_2 = bpi12_rules(scalers)
     # TRAFFIC RULES
     if dataset == "traffic_fines":
         rule_penalty = lambda x: (x[:, :10] == 1).any(dim=1)
@@ -699,4 +712,4 @@ def compute_metrics(loader, model, device, mode, scalers, dataset):
     elif mode == "nesy":
         plt.savefig("confusion_matrix_nesy.png", dpi=300, bbox_inches='tight')  # Save figure
     plt.close()  # Close the figure to avoid displaying it in environments that don't support display
-    return accuracy, f1score, precision, recall, compliance
+    return accuracy*100, f1score*100, precision*100, recall*100, compliance*100

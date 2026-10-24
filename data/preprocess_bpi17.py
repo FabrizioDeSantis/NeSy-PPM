@@ -1,379 +1,80 @@
-from sklearn.preprocessing import MinMaxScaler
-from sklearn.model_selection import train_test_split
-import pandas as pd
 import random
 
+import pandas as pd
+
+from data.common import CASE, build_splits, case_attributes, encode_categorical, fit_scalers, prepare_log, split_cases
+
+WINDOW_SIZE = 20
+
+# Label implied by each rule when it fires (rule_1 -> 1, the others -> 0).
+RULE_TARGETS = {"rule_1": 1, "rule_2": 0, "rule_3": 0, "rule_4": 0}
+
+# Model input features, in this order. The rules in main_bpi17.py / metrics.py index them by position
+# (feature i spans columns [i * WINDOW_SIZE, (i + 1) * WINDOW_SIZE)), so do not reorder.
+FEATURES = ["concept:name", "case:LoanGoal", "CreditScore", "Action", "org:resource", "lifecycle:transition",
+            "case:ApplicationType", "case:RequestedAmount", "FirstWithdrawalAmount", "NumberOfTerms",
+            "MonthlyCost", "OfferedAmount"]
+CATEGORICAL = ["concept:name", "org:resource", "Action", "lifecycle:transition", "case:LoanGoal",
+               "case:ApplicationType", "NumberOfTerms"]
+NUMERICAL = ["case:RequestedAmount", "FirstWithdrawalAmount", "MonthlyCost", "CreditScore", "OfferedAmount"]
+
+# Category codes printed for reference: the rule definitions hard-code some of them.
+LOGGED_CODES = {
+    "concept:name": ["O_Created", "O_Create Offer", "A_Accepted", "A_Submitted", "W_Validate application",
+                     "A_Complete"],
+    "case:LoanGoal": ["Existing loan takeover", "Car"],
+    "case:ApplicationType": ["New credit"],
+}
+
+
 def create_test_set(data, seed, ratio=0.2):
-    random.seed(seed)
-    grouped = data.groupby("case:concept:name")
-    unique_groups = list(grouped.groups.keys())
-    labels = data.groupby("case:concept:name")["label"].first().to_list()
+    """Compliance split: ~70% of the held-out cases are cases where a rule fires and agrees with the label;
+    the rest are drawn from cases where no rule contradicts the label. Returns (remaining_ids, held_out_ids)."""
+    rng = random.Random(seed)
+    cases = case_attributes(data, ["label", *RULE_TARGETS])
+    case_ids = cases.index.tolist()
+    n_test = int(len(case_ids) * ratio)
 
-    len_test_set = int(len(unique_groups) * ratio)
-    len_training_set = len(unique_groups) - len_test_set
+    fired = cases[list(RULE_TARGETS)] == 1
+    agrees = pd.DataFrame({rule: cases["label"] == target for rule, target in RULE_TARGETS.items()})
+    compliant_ids = cases.index[(fired & agrees).any(axis=1)].tolist()
+    non_compliant_ids = set(cases.index[(fired & ~agrees).any(axis=1)])
 
-    labels_r1 = data.groupby("case:concept:name")["rule_1"].first().to_list()
-    labels_r2 = data.groupby("case:concept:name")["rule_2"].first().to_list()
-    labels_r3 = data.groupby("case:concept:name")["rule_3"].first().to_list()
-    labels_r4 = data.groupby("case:concept:name")["rule_4"].first().to_list()
-
-    filtered_values_r1 = [v for v, l, r in zip(unique_groups, labels, labels_r1) if (r == 1 and l == 1)]
-    filtered_values_r2 = [v for v, l, r in zip(unique_groups, labels, labels_r2) if (r == 1 and l == 0)]
-    filtered_values_r3 = [v for v, l, r in zip(unique_groups, labels, labels_r3) if (r == 1 and l == 0)]
-    filtered_values_r4 = [v for v, l, r in zip(unique_groups, labels, labels_r4) if (r == 1 and l == 0)]
-    compliant_ids = list(set(filtered_values_r1 + filtered_values_r2 + filtered_values_r3 + filtered_values_r4))
-
-    filtered_no_r1 = [v for v, l, r in zip(unique_groups, labels, labels_r1) if (r == 1 and l != 1)]
-    filtered_no_r2 = [v for v, l, r in zip(unique_groups, labels, labels_r2) if (r == 1 and l != 0)]
-    filtered_no_r3 = [v for v, l, r in zip(unique_groups, labels, labels_r3) if (r == 1 and l != 0)]
-    filtered_no_r4 = [v for v, l, r in zip(unique_groups, labels, labels_r4) if (r == 1 and l != 0)]
-    non_compliant_ids = list(set(filtered_no_r1 + filtered_no_r2 + filtered_no_r3 + filtered_no_r4))
-
-    print("Len training set: ", len_training_set)
-    print("Len test set: ", len_test_set)
+    print("Len training set: ", len(case_ids) - n_test)
+    print("Len test set: ", n_test)
     print("Number of compliant traces: ", len(compliant_ids))
     print("Number of non-compliant traces: ", len(non_compliant_ids))
 
-    if len(compliant_ids) > len_test_set:
-        test_ids = random.sample(compliant_ids, int(len_test_set*0.7))
-        remaining_ids = [x for x in unique_groups if x not in test_ids and x not in non_compliant_ids]
-        remaining_ids = random.sample(remaining_ids, len_test_set - len(test_ids))
-        test_ids = test_ids + remaining_ids
+    if len(compliant_ids) > n_test:
+        test_ids = rng.sample(compliant_ids, int(n_test * 0.7))
+        taken = set(test_ids)
+        candidates = [x for x in case_ids if x not in taken and x not in non_compliant_ids]
+        test_ids += rng.sample(candidates, n_test - len(test_ids))
     else:
         test_ids = compliant_ids
 
-    training_ids = [x for x in unique_groups if x not in test_ids]
+    test_set = set(test_ids)
+    training_ids = [x for x in case_ids if x not in test_set]
 
-    print("Compliant traces in training set: ", len([x for x in training_ids if x in compliant_ids]))
-    print("Compliant traces in test set: ", len([x for x in test_ids if x in compliant_ids]))
-
-    return training_ids, test_ids
-
-def create_train_val_test_split(data, train_ratio=0.8, val_ratio=0.2, test_ratio=0.2):
-    data = data.sort_values(by=['case:concept:name', 'time:timestamp'])
-    graph_ids = data['case:concept:name'].unique()
-    num_graphs = len(graph_ids)
-    test_size = int(num_graphs * test_ratio)
-    val_size = int((num_graphs - test_size) * val_ratio)
-    train_size = num_graphs - test_size - val_size
-    print(f"Total graphs: {num_graphs}, Train: {train_size}, Val: {val_size}, Test: {test_size}")
-    train_ids = graph_ids[:train_size]
-    val_ids = graph_ids[train_size:train_size + val_size]
-    test_ids = graph_ids[train_size + val_size:]
-    return train_ids, val_ids, test_ids
-
-from sklearn.preprocessing import MinMaxScaler
-from sklearn.model_selection import train_test_split
-import pandas as pd
-import random
-
-def create_test_set(data, seed, ratio=0.2):
-    random.seed(seed)
-    grouped = data.groupby("case:concept:name")
-    unique_groups = list(grouped.groups.keys())  # Get the unique group IDs
-    labels = data.groupby("case:concept:name")["label"].first().to_list()
-
-    len_test_set = int(len(unique_groups) * ratio)
-
-    labels_r1 = data.groupby("case:concept:name")["rule_1"].first().to_list()
-    labels_r2 = data.groupby("case:concept:name")["rule_2"].first().to_list()
-    labels_r3 = data.groupby("case:concept:name")["rule_3"].first().to_list()
-    labels_r4 = data.groupby("case:concept:name")["rule_4"].first().to_list()
-    labels_r5 = data.groupby("case:concept:name")["rule_5"].first().to_list()
-
-    filtered_values_r1 = [v for v, l, r in zip(unique_groups, labels, labels_r1) if (r == 1 and l == 0)]
-    filtered_values_r2 = [v for v, l, r in zip(unique_groups, labels, labels_r2) if (r == 1 and l == 0)]
-    filtered_values_r3 = [v for v, l, r in zip(unique_groups, labels, labels_r3) if (r == 1 and l == 0)]
-    filtered_values_r4 = [v for v, l, r in zip(unique_groups, labels, labels_r4) if (r == 1 and l == 0)]
-    filtered_values_r5 = [v for v, l, r in zip(unique_groups, labels, labels_r5) if (r == 1 and l == 0)]
-
-    filtered_values_nor = [v for v, l, r1, r2, r3, r4, r5 in zip(unique_groups, labels, labels_r1, labels_r2, labels_r3, labels_r4, labels_r5) if (r1 == 0 and r2 == 0 and r3 == 0 and l == 1)]
-
-    filtered_values = filtered_values_r1 + filtered_values_r2 + filtered_values_r3 + filtered_values_nor
-    compliant_ids = list(set(filtered_values_r1 + filtered_values_r2 + filtered_values_r3))
-    filtered_values = list(set(filtered_values))
-
-    print("Len filtered values: ", len(filtered_values))
-    if len(filtered_values) > len_test_set:
-        test_ids = random.sample(filtered_values, len_test_set)
-    else:
-        test_ids = filtered_values
-
-    training_ids = [x for x in unique_groups if x not in test_ids]
-    training_ids = list(set(training_ids)) 
-
-    compliant_training_ids = [x for x in training_ids if x in compliant_ids]
-    compliant_test_ids = [x for x in test_ids if x in compliant_ids]
-    print("Len training set: ", len(training_ids))
-    print("Len test set: ", len(test_ids))
-    print("Number of compliant traces in training set: ", len(compliant_training_ids))
-    print("Number of compliant traces in test set: ", len(compliant_test_ids))
+    compliant_set = set(compliant_ids)
+    print("Compliant traces in training set: ", sum(x in compliant_set for x in training_ids))
+    print("Compliant traces in test set: ", sum(x in compliant_set for x in test_ids))
 
     return training_ids, test_ids
 
-def create_train_val_test_split(data, train_ratio=0.8, val_ratio=0.2, test_ratio=0.2):
-    data = data.sort_values(by=['case:concept:name', 'time:timestamp'])
-    graph_ids = data['case:concept:name'].unique()
-    num_graphs = len(graph_ids)
-    test_size = int(num_graphs * test_ratio)
-    val_size = int((num_graphs - test_size) * val_ratio)
-    train_size = num_graphs - test_size - val_size
-    print(f"Total graphs: {num_graphs}, Train: {train_size}, Val: {val_size}, Test: {test_size}")
-    train_ids = graph_ids[:train_size]
-    val_ids = graph_ids[train_size:train_size + val_size]
-    test_ids = graph_ids[train_size + val_size:]
-    return train_ids, val_ids, test_ids
 
-def create_ngrams(data, train_ids, val_ids,test_ids, window_size=20):
-
-    ngrams_test = []
-    ngrams_training = []
-    ngrams_val = []
-    labels_training = []
-    labels_test = []
-    labels_val = []
-
-    training_data = data[data["case:concept:name"].isin(train_ids)]
-    val_data = data[data["case:concept:name"].isin(val_ids)]
-    test_data = data[data["case:concept:name"].isin(test_ids)]
-    max_len = 13
-
-    for id_value, group in training_data.groupby('case:concept:name'):
-
-        group = group.reset_index(drop=True)
-                
-        label = int(group['label'].dropna().iloc[0])
-        if label == 0:
-            idx = group[group['concept:name_str'].str.contains(r'\bRelease\b', na=False)].index
-            if not idx.empty:
-                group = group.iloc[:idx[0]]
-
-        if len(group) > window_size:
-            group = group.iloc[:window_size]
-
-        group = group.drop(columns=["label", "case:concept:name", "time:timestamp", "lifecycle:transition", "concept:name_str", "rule_1", "rule_2", "rule_3", "rule_4", "rule_5"])
-
-        feature_names = group.columns.tolist()
-        for n in range(1, len(group), 1):
-            labels_training.append(label)
-            ngram_df = group.iloc[:n]
-            list_of_lists = ngram_df.values.tolist()
-            cols = [list(col) for col in zip(*list_of_lists)]
-            cols = [inner_list + [0] * (window_size-len(inner_list)) for inner_list in cols]
-            ngrams_training.append(cols)
-
-    for id_value, group in val_data.groupby('case:concept:name'):
-
-        group = group.reset_index(drop=True)
-                
-        label = int(group['label'].dropna().iloc[0])
-        if label == 0:
-            idx = group[group['concept:name_str'].str.contains(r'\bRelease\b', na=False)].index
-            if not idx.empty:
-                group = group.iloc[:idx[0]]
-
-        if len(group) > window_size:
-            group = group.iloc[:window_size]
-
-        group = group.drop(columns=["label", "case:concept:name", "time:timestamp", "lifecycle:transition", "concept:name_str", "rule_1", "rule_2", "rule_3", "rule_4", "rule_5"])
-
-        feature_names = group.columns.tolist()
-        for n in range(1, len(group), 1):
-            labels_val.append(label)
-            ngram_df = group.iloc[:n]
-            list_of_lists = ngram_df.values.tolist()
-            cols = [list(col) for col in zip(*list_of_lists)]
-            cols = [inner_list + [0] * (window_size-len(inner_list)) for inner_list in cols]
-            ngrams_val.append(cols)
-
-    for id_value, group in test_data.groupby('case:concept:name'):
-
-        group = group.reset_index(drop=True)
-                
-        label = int(group['label'].dropna().iloc[0])
-        if label == 0:
-            idx = group[group['concept:name_str'].str.contains(r'\bRelease\b', na=False)].index
-            if not idx.empty:
-                group = group.iloc[:idx[0]]
-
-        if len(group) > window_size:
-            group = group.iloc[:window_size]
-
-        group = group.drop(columns=["label", "case:concept:name", "time:timestamp", "lifecycle:transition", "concept:name_str", "rule_1", "rule_2", "rule_3", "rule_4", "rule_5"])
-        
-        feature_names = group.columns.tolist()
-        for n in range(1, len(group), 1):
-            labels_test.append(label)
-            ngram_df = group.iloc[:n]
-            list_of_lists = ngram_df.values.tolist()
-            cols = [list(col) for col in zip(*list_of_lists)]
-            cols = [inner_list + [0] * (window_size-len(inner_list)) for inner_list in cols]
-            ngrams_test.append(cols)
-
-    return ngrams_training, labels_training, ngrams_val, labels_val, ngrams_test, labels_test, feature_names
-
-def preprocess_eventlog(data, seed, setting="compliance"):
-
-    vocab_sizes = {}
-    cases = data[data["concept:name"] == "A_SUBMITTED-COMPLETE"]
-    labels = cases["label"].to_list()
-    case_ids = cases["case:concept:name"].to_list()
-    print("Number of traces: ", len(labels))
-
-    if setting == "compliance":
-        train_ids, test_ids = create_test_set(data, seed)
-        data_training = data[data["case:concept:name"].isin(train_ids)]
-        train_ids, val_ids = create_test_set(data_training, seed, ratio=0.2)
-    else:
-        train_ids, val_ids, test_ids = create_train_val_test_split(data, train_ratio=0.8, val_ratio=0.2, test_ratio=0.2)
-
-    print("Number of traces in train set: ", len(train_ids))
-    print("Number of traces in val set: ", len(val_ids))
-    print("Number of traces in test set: ", len(test_ids))
-
-    scaler_ar = MinMaxScaler()
-    scaler_elapsed = MinMaxScaler()
-    scaler_time_prev = MinMaxScaler()
-    
-    labels = data.groupby("case:concept:name")["label"].first().reset_index()
-    print(data.columns)
-    data = data.drop(columns=["case:REG_DATE"])
-
-    data["concept:name_str"] = data["concept:name"]
-    print("concept:name_str: ", data["concept:name_str"].unique())
-    data["concept:name"] = pd.Categorical(data["concept:name"])
-    print("W_Completeren aanvraag-COMPLETE: ", data["concept:name"].cat.categories.get_loc("W_Completeren aanvraag-COMPLETE") + 1)
-    print("W_Valideren aanvraag-COMPLETE: ", data["concept:name"].cat.categories.get_loc("W_Valideren aanvraag-COMPLETE") + 1)
-    print("W_Nabellen offertes-START: ", data["concept:name"].cat.categories.get_loc("W_Nabellen offertes-START") + 1)
-    print("O_SENT_BACK-COMPLETE: ", data["concept:name"].cat.categories.get_loc("O_SENT_BACK-COMPLETE") + 1)
-    print("O_CANCELLED-COMPLETE: ", data["concept:name"].cat.categories.get_loc("O_CANCELLED-COMPLETE") + 1)
-    print("A_ACCEPTED-COMPLETE: ", data["concept:name"].cat.categories.get_loc("A_ACCEPTED-COMPLETE") + 1)
-    data["concept:name"] = data["concept:name"].cat.codes + 1
-    vocab_sizes["concept:name"] = data["concept:name"].max()
-
-    data["org:resource"] = pd.Categorical(data["org:resource"])
-    res_11169 = data["org:resource"].cat.categories.get_loc("11169") + 1
-    print("11169 code: ", res_11169)
-    res_10910 = data["org:resource"].cat.categories.get_loc("10910") + 1
-    print("10910 code: ", res_10910)
-    data["org:resource"] = data["org:resource"].cat.codes + 1
-    vocab_sizes["org:resource"] = data["org:resource"].max()
-
-    # Numerical values
-    data["case:AMOUNT_REQ"] = data["case:AMOUNT_REQ"].ffill()
-    data["case:AMOUNT_REQ"] = scaler_ar.fit_transform(data[["case:AMOUNT_REQ"]])
-    data["elapsed_time"] = data["elapsed_time"].fillna(0)
-    data["elapsed_time"] = scaler_elapsed.fit_transform(data[["elapsed_time"]])
-    data["time_since_previous"] = data["time_since_previous"].fillna(0)
-    data["time_since_previous"] = scaler_time_prev.fit_transform(data[["time_since_previous"]])
-
-    scalers = {
-        "case:AMOUNT_REQ": scaler_ar,
-        "elapsed_time": scaler_elapsed,
-        "time_since_previous": scaler_time_prev
-    }
-
-    return create_ngrams(data, train_ids, val_ids, test_ids), vocab_sizes, scalers
-
-def preprocess_eventlog(data, seed, setting="compliance"):
-    vocab_sizes = {}
-    cases = data[data["concept:name"] == "A_Create Application"]
-    labels = cases["label"].to_list()
-    case_ids = cases["case:concept:name"].to_list()
-    print(len(case_ids))
-    print("Number of traces: ", len(labels))
-
-    if setting == "compliance":
-        train_ids, test_ids = create_test_set(data, seed)
-        data_training = data[data["case:concept:name"].isin(train_ids)]
-        train_ids, val_ids = create_test_set(data_training, seed, ratio=0.2)
-    else:
-        train_ids, val_ids, test_ids = create_train_val_test_split(data, train_ratio=0.8, val_ratio=0.2, test_ratio=0.2)
-
-    print("Number of traces in train set: ", len(train_ids))
-    print("Number of traces in test set: ", len(test_ids))
-
-    scalers = {}
-
-    data = data.drop(columns=["OfferID", "EventID", "EventOrigin", "Accepted", "Selected"])
-
-    print(data.columns)
-
-    data["concept:name"] = pd.Categorical(data["concept:name"])
-    print("O_Created code: ", data["concept:name"].cat.categories.get_loc("O_Created") + 1)
-    print("O_Create Offer code: ", data["concept:name"].cat.categories.get_loc("O_Create Offer") + 1)
-    print("A_Accepted code: ", data["concept:name"].cat.categories.get_loc("A_Accepted") + 1)
-    print("O_Create Offer code: ", data["concept:name"].cat.categories.get_loc("O_Create Offer") + 1)
-    print("A_Submitted code: ", data["concept:name"].cat.categories.get_loc("A_Submitted") + 1)
-    print("W_Validate application code: ", data["concept:name"].cat.categories.get_loc("W_Validate application") + 1)
-    print("A_Complete code: ", data["concept:name"].cat.categories.get_loc("A_Complete") + 1)
-    data["concept:name"] = data["concept:name"].cat.codes + 1
-    vocab_sizes["concept:name"] = data["concept:name"].max()
-
+def encode_features(data, train_ids):
+    """Integer-encodes categorical features and min-max scales numerical ones (scalers fit on `train_ids`)."""
+    data = data[[CASE, "label", *FEATURES]].copy()
     data["org:resource"] = data["org:resource"].fillna("Unknown")
-    data["org:resource"] = pd.Categorical(data["org:resource"])
-    data["org:resource"] = data["org:resource"].cat.codes + 1
-    vocab_sizes["org:resource"] = data["org:resource"].max()
+    data[NUMERICAL + ["NumberOfTerms"]] = data[NUMERICAL + ["NumberOfTerms"]].fillna(0)
+    vocab_sizes = encode_categorical(data, CATEGORICAL, LOGGED_CODES)
+    scalers = fit_scalers(data, NUMERICAL, train_ids)
+    return data, vocab_sizes, scalers
 
-    data["Action"] = pd.Categorical(data["Action"])
-    data["Action"] = data["Action"].cat.codes + 1
-    vocab_sizes["Action"] = data["Action"].max()
 
-    data["lifecycle:transition"] = pd.Categorical(data["lifecycle:transition"])
-    data["lifecycle:transition"] = data["lifecycle:transition"].cat.codes + 1
-    vocab_sizes["lifecycle:transition"] = data["lifecycle:transition"].max()
-
-    data["case:LoanGoal"] = pd.Categorical(data["case:LoanGoal"])
-    print("Case LoanGoal code: ", data["case:LoanGoal"].cat.categories.get_loc("Existing loan takeover") + 1)
-    print("Case LoanGoal Car: ", data["case:LoanGoal"].cat.categories.get_loc("Car") + 1)
-    data["case:LoanGoal"] = data["case:LoanGoal"].cat.codes + 1
-    vocab_sizes["case:LoanGoal"] = data["case:LoanGoal"].max()
-
-    data["case:ApplicationType"] = pd.Categorical(data["case:ApplicationType"])
-    print("Case ApplicationType code: ", data["case:ApplicationType"].cat.categories.get_loc("New credit") + 1)
-    data["case:ApplicationType"] = data["case:ApplicationType"].cat.codes + 1
-    vocab_sizes["case:ApplicationType"] = data["case:ApplicationType"].max()
-
-    data["NumberOfTerms"] = data["NumberOfTerms"].fillna(0)
-    data["NumberOfTerms"] = pd.Categorical(data["NumberOfTerms"])
-    data["NumberOfTerms"] = data["NumberOfTerms"].cat.codes + 1
-    vocab_sizes["NumberOfTerms"] = data["NumberOfTerms"].max()
-
-    scaler_ra = MinMaxScaler()
-    data["case:RequestedAmount"] = data["case:RequestedAmount"].fillna(0)
-    data["case:RequestedAmount"] = scaler_ra.fit_transform(data[["case:RequestedAmount"]])
-    scalers["case:RequestedAmount"] = scaler_ra
-
-    scaler_fw = MinMaxScaler()
-    data["FirstWithdrawalAmount"] = data["FirstWithdrawalAmount"].fillna(0)
-    data["FirstWithdrawalAmount"] = scaler_fw.fit_transform(data[["FirstWithdrawalAmount"]])
-    scalers["FirstWithdrawalAmount"] = scaler_fw
-
-    scaler_mc = MinMaxScaler()
-    data["MonthlyCost"] = data["MonthlyCost"].fillna(0)
-    data["MonthlyCost"] = scaler_mc.fit_transform(data[["MonthlyCost"]])
-    scalers["MonthlyCost"] = scaler_mc
-
-    scaler_cr = MinMaxScaler()
-    data["CreditScore"] = data["CreditScore"].fillna(0)
-    data["CreditScore"] = scaler_cr.fit_transform(data[["CreditScore"]])
-    scalers["CreditScore"] = scaler_cr
-
-    scaler_oa = MinMaxScaler()
-    data["OfferedAmount"] = data["OfferedAmount"].fillna(0)
-    data["OfferedAmount"] = scaler_oa.fit_transform(data[["OfferedAmount"]])
-    scalers["OfferedAmount"] = scaler_oa
-
-    scaler_elapsed = MinMaxScaler()
-    data["elapsed_time"] = data["elapsed_time"].fillna(0)
-    data["elapsed_time"] = scaler_elapsed.fit_transform(data[["elapsed_time"]])
-    scalers["elapsed_time"] = scaler_elapsed
-
-    scaler_time_prev = MinMaxScaler()
-    data["time_since_previous"] = data["time_since_previous"].fillna(0)
-    data["time_since_previous"] = scaler_time_prev.fit_transform(data[["time_since_previous"]])
-    scalers["time_since_previous"] = scaler_time_prev
-
-    data = data[['case:concept:name', 'label', 'concept:name', 'case:LoanGoal', 'CreditScore', 'Action', 'org:resource', 'lifecycle:transition', 'case:ApplicationType', 'case:RequestedAmount', 'FirstWithdrawalAmount', 'NumberOfTerms', 'MonthlyCost', 'OfferedAmount', 'time:timestamp', 'elapsed_time', 'time_since_previous', 'rule_1', 'rule_2', 'rule_3']]
-
-    return create_ngrams(data, train_ids, val_ids, test_ids), vocab_sizes, scalers
+def preprocess_eventlog(data, seed, setting="compliance"):
+    data = prepare_log(data)
+    split_ids = split_cases(data, seed, setting, create_test_set)
+    data, vocab_sizes, scalers = encode_features(data, split_ids[0])
+    return build_splits(data, split_ids, FEATURES, WINDOW_SIZE), vocab_sizes, scalers
