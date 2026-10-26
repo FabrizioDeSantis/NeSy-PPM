@@ -76,7 +76,6 @@ def create_test_set(data, seed, ratio=0.2):
 
 def encode_features(data, train_ids):
     """Integer-encodes categorical features and min-max scales numerical ones (scalers fit on `train_ids`).
-<<<<<<< HEAD
     Payments are scaled with the fine-amount scaler, so the two stay comparable.
     Returns (events, vocab_sizes, scalers, category_codes)."""
     data = data[[CASE, "label", *FEATURES]].copy()
@@ -91,21 +90,3 @@ def encode_features(data, train_ids):
 
 def preprocess_eventlog(data, seed, setting="compliance"):
     return common.preprocess_eventlog(sys.modules[__name__], data, seed, setting)
-=======
-    Payments are scaled with the fine-amount scaler, so the two stay comparable."""
-    data = data[[CASE, "label", *FEATURES]].copy()
-    data[FORWARD_FILLED] = data.groupby(CASE)[FORWARD_FILLED].ffill()
-    data = data.fillna(FILL_VALUES)
-    vocab_sizes = encode_categorical(data, CATEGORICAL, LOGGED_CODES)
-    scalers = fit_scalers(data, NUMERICAL, train_ids)
-    scalers["paymentAmount"] = scalers["amount"]
-    data["paymentAmount"] = scalers["amount"].transform(data[["paymentAmount"]].to_numpy(dtype=float))[:, 0]
-    return data, vocab_sizes, scalers
-
-
-def preprocess_eventlog(data, seed, setting="compliance"):
-    data = prepare_log(data)
-    split_ids = split_cases(data, seed, setting, create_test_set)
-    data, vocab_sizes, scalers = encode_features(data, split_ids[0])
-    return build_splits(data, split_ids, FEATURES, WINDOW_SIZE), vocab_sizes, scalers
->>>>>>> 4f36cb968508f65a40d28fa775e60de82d73c536

@@ -1,12 +1,8 @@
 import torch
 import torch.nn as nn
-<<<<<<< HEAD
 
 from model.inputs import EventEncoder
 
-=======
-import torch.nn.functional as F
->>>>>>> 4f36cb968508f65a40d28fa775e60de82d73c536
 
 class EventTransformer(nn.Module):
     """Transformer encoder over the events of a prefix, mean-pooled. Returns P(label = 1), shape (B, 1)."""

@@ -52,28 +52,16 @@ def create_test_set(data, seed, ratio=0.2):
     """Compliance split: held-out cases are drawn from those where the rules agree with the label
     (a rule fires and the label is 1, or no rule fires and the label is 0). Returns (remaining_ids, held_out_ids)."""
     rng = random.Random(seed)
-<<<<<<< HEAD
     cases = case_attributes(data, ["label", *RULES])
     fired = (cases[RULES] == 1).any(axis=1)
     compliant = fired & (cases["label"] == 1)
     pool = cases.index[compliant | ((cases[RULES] == 0).all(axis=1) & (cases["label"] == 0))]
-=======
-    cases = case_attributes(data, ["label", *ALL_RULES])
-    positive = cases["label"] == 1
-    compliant = (cases[POSITIVE_RULES] == 1).any(axis=1) & positive
-    pool = cases.index[compliant | ((cases[NO_RULES] == 0).all(axis=1) & (cases["label"] == 0))]
-    non_compliant = (cases[ALL_RULES] == 1).any(axis=1) & (cases["label"] == 0)
->>>>>>> 4f36cb968508f65a40d28fa775e60de82d73c536
     n_test = int(len(cases) * ratio)
 
     print("Len training set: ", len(cases) - n_test)
     print("Len test set: ", n_test)
     print("Number of compliant traces: ", len(pool))
-<<<<<<< HEAD
     print("Number of non-compliant traces: ", (fired & (cases["label"] == 0)).sum())
-=======
-    print("Number of non-compliant traces: ", non_compliant.sum())
->>>>>>> 4f36cb968508f65a40d28fa775e60de82d73c536
 
     training_ids, test_ids = sample_test_cases(cases.index.tolist(), pool, n_test, rng)
 
@@ -90,7 +78,6 @@ def drop_after_release(data):
 
 
 def encode_features(data, train_ids):
-<<<<<<< HEAD
     """Integer-encodes categorical features and min-max scales numerical ones (scalers fit on `train_ids`).
     Returns (events, vocab_sizes, scalers, category_codes)."""
     data = drop_after_release(data)[[CASE, "label", *FEATURES]].copy()
@@ -103,19 +90,3 @@ def encode_features(data, train_ids):
 
 def preprocess_eventlog(data, seed, setting="compliance"):
     return common.preprocess_eventlog(sys.modules[__name__], data, seed, setting)
-=======
-    """Integer-encodes categorical features and min-max scales numerical ones (scalers fit on `train_ids`)."""
-    data = data[[CASE, "label", *FEATURES]].copy()
-    data[INTEGER] = data[INTEGER].fillna(0).astype(int)
-    data[NUMERICAL] = data[NUMERICAL].fillna(0)
-    vocab_sizes = encode_categorical(data, CATEGORICAL, LOGGED_CODES)
-    scalers = fit_scalers(data, NUMERICAL, train_ids)
-    return data, vocab_sizes, scalers
-
-
-def preprocess_eventlog(data, seed, setting="compliance"):
-    data = prepare_log(data)
-    split_ids = split_cases(data, seed, setting, create_test_set)
-    data, vocab_sizes, scalers = encode_features(drop_after_release(data), split_ids[0])
-    return build_splits(data, split_ids, FEATURES, WINDOW_SIZE), vocab_sizes, scalers
->>>>>>> 4f36cb968508f65a40d28fa775e60de82d73c536
