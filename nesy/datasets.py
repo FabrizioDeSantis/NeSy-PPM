@@ -43,7 +43,7 @@ class DatasetSpec:
 DATASETS = {
     "bpi12": DatasetSpec(
         "data_processed/bpi12.csv", preprocess_bpi12,
-        Pruning(stats_epoch=1, gate_epoch=5, threshold=0.5, variance_penalty=1.0, fired_only=True,
+        Pruning(stats_epoch=5, gate_epoch=5, threshold=0.25, variance_penalty=1.0, fired_only=True,
                 no_support_score=1.0),
         {"vanilla": Training(patience=5), "ltn_pruning": Training(patience=8),
          "ltn_no_pruning_weighted": Training(patience=15), "ltn_adaptive": Training(patience=15)}),
